@@ -1,6 +1,28 @@
 # Interview Coder - Unlocked Edition
 
-An invisible desktop application that helps you pass your technical interviews.
+## Free, Open-Source Alternative to Paid AI Interview Tools
+
+This project offers a completely free alternative to premium AI interview coding tools like Interview Coder, AlgoExpert, and similar platforms. I've removed all paywalls, subscriptions, and user authentication – replacing them with a local backend that uses your own OpenAI API key.
+
+### Why This Exists
+
+The best coding interview tools are often behind expensive paywalls, making them inaccessible to many students and job seekers. This project provides the same powerful functionality without the cost barrier, letting you:
+
+- Use your own API key (pay only for what you use)
+- Run everything locally on your machine with complete privacy
+- Make customizations to suit your specific needs
+- Learn from and contribute to an open-source tool
+
+### Customization Possibilities
+
+The codebase is designed to be adaptable:
+
+- **AI Models**: Though currently using OpenAI's models, you can modify the code to integrate with other providers like Claude, Deepseek, Llama, or any model with an API
+- **Languages**: Add support for additional programming languages
+- **Features**: Extend the functionality with new capabilities 
+- **UI**: Customize the interface to your preferences
+
+All it takes is modest JavaScript/TypeScript knowledge and understanding of the API you want to integrate.
 
 ## Features
 
@@ -97,6 +119,23 @@ npm run build
 
 3. Alternatively, you can use the provided `stealth-run.bat` to quickly build and launch the application.
 
+## Comparison with Paid Version of Interview Coder
+
+| Feature | Interview Coder (Paid) | Interview Coder Unlocked (This Project) |
+|---------|------------------------|----------------------------------------|
+| Price | $60/month subscription | Free (only pay for your API usage) |
+| Solution Generation | ✅ | ✅ |
+| Debugging Assistance | ✅ | ✅ |
+| Invisibility | ✅ | ✅ |
+| Multi-language Support | ✅ | ✅ |
+| Time/Space Complexity Analysis | ✅ | ✅ |
+| Window Management | ✅ | ✅ |
+| Auth System | Required | None (Simplified) |
+| Payment Processing | Required | None (Use your own API key) |
+| Privacy | Server-processed | 100% Local Processing |
+| Customization | Limited | Full Source Code Access |
+| Model Selection | Limited | Choice Between Models |
+
 ## Tech Stack
 
 - Electron
@@ -138,6 +177,31 @@ npm run build
    - Window remains invisible to specified screen sharing applications
    - Reset view using [Control or Cmd + R]
 
+## Using Custom AI Models
+
+This application currently uses OpenAI's GPT models, but you can adapt it to work with other AI providers:
+
+### Integration Points
+
+The main integration point is in `electron/ProcessingHelper.ts`, which handles:
+
+1. **Problem Extraction**: Converting screenshots to text and understanding the problem
+2. **Solution Generation**: Creating optimized solutions with explanations
+3. **Debugging**: Analyzing code errors and providing improvement suggestions
+
+### Steps to Integrate Different Models
+
+1. Replace the OpenAI client initialization with your preferred AI provider's SDK
+2. Modify the API calls in `processScreenshotsHelper`, `generateSolutionsHelper`, and `processExtraScreenshotsHelper` methods
+3. Adjust prompt formats based on your chosen model's capabilities
+4. Update the UI components in `src/components/Settings/SettingsDialog.tsx` to reflect your model options
+
+Common alternative AI providers to consider:
+- Anthropic's Claude (good vision capabilities)
+- Deepseek (strong coding performance)
+- Self-hosted open-source models (Llama, Mixtral)
+- Azure OpenAI Service (same API but with Azure integration)
+
 ## Configuration
 
 - **OpenAI API Key**: Your personal API key is stored locally and only used for API calls to OpenAI
@@ -165,3 +229,18 @@ See the [LICENSE-SHORT](LICENSE-SHORT) file for a summary of terms or visit [GNU
 ### Contributing
 
 We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for more information.
+
+## Disclaimer and Ethical Usage
+
+This tool is intended as a learning aid and practice assistant. While it can help you understand problems and solution approaches during interviews, consider these ethical guidelines:
+
+- Be honest about using assistance tools if asked directly in an interview
+- Use this tool to learn concepts, not just to get answers
+- Recognize that understanding solutions is more valuable than simply presenting them
+- In take-home assignments, make sure you thoroughly understand any solutions you submit
+
+Remember that the purpose of technical interviews is to assess your problem-solving skills and understanding. This tool works best when used to enhance your learning, not as a substitute for it.
+
+## Support and Questions
+
+If you have questions or need support, please open an issue on the GitHub repository.
