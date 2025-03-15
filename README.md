@@ -82,7 +82,9 @@ Note: The application is **NOT** invisible to:
   - On Linux:
     - May require `xhost` access depending on your distribution
 
-## Installation
+## Running the Application
+
+### Initial Setup
 
 1. Clone the repository:
 
@@ -95,29 +97,56 @@ cd interview-coder-unlocked
 
 ```bash
 npm install
-# or if using bun
-bun install
 ```
 
-3. Start the application:
+This will install all required npm packages including Electron, React, TypeScript, and other dependencies needed for the application.
+
+### Running in Stealth Mode
+
+For the best experience, follow these steps to run the application:
+
+1. First, clean any previous builds:
 
 ```bash
-npm run dev
+npm run clean
 ```
 
-4. Enter your OpenAI API key in the settings dialog when prompted.
+This command removes the `dist` and `dist-electron` directories to ensure a fresh build without any cached files or outdated components.
 
-## Running in Production
-
-1. Build the application:
+2. Then run the stealth-run batch file:
 
 ```bash
-npm run build
+stealth-run.bat
 ```
 
-2. The built application will be in the `dist` directory.
+**What the stealth-run.bat does:**
+- Creates necessary directories in your AppData folder for storing screenshots and cache
+- Builds the application in production mode
+- Launches the application in stealth mode (invisible by default)
+- Provides a reminder of key shortcuts
 
-3. Alternatively, you can use the provided `stealth-run.bat` to quickly build and launch the application.
+**IMPORTANT**: When using stealth-run.bat, the application window will be invisible by default! Use Ctrl+B (or Cmd+B on Mac) to toggle visibility.
+
+### Troubleshooting
+
+If you encounter any issues with the application:
+
+1. Always start with a clean build:
+
+```bash
+npm run clean
+```
+
+2. Make sure you have the latest dependencies:
+
+```bash
+npm install
+```
+
+3. If the window is invisible and keyboard shortcuts don't seem to work, try:
+   - Pressing Ctrl+B (or Cmd+B on Mac) multiple times
+   - Checking Task Manager/Activity Monitor to verify the application is running
+   - Restarting the application
 
 ## Comparison with Paid Version of Interview Coder
 
