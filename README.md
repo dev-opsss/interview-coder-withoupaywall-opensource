@@ -144,6 +144,7 @@ chmod +x stealth-run.sh
 ## Comparison with Paid Version of Interview Coder
 
 | Feature | Interview Coder (Paid) | Interview Coder Unlocked (This Project) |
+|---------|------------------------|----------------------------------------|
 | Price | $60/month subscription | Free (only pay for your API usage) |
 | Solution Generation | ✅ | ✅ |
 | Debugging Assistance | ✅ | ✅ |
