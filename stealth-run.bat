@@ -18,16 +18,22 @@ echo.
 
 cd /D "%~dp0"
 
-echo 1. Creating required directories...
+echo === Step 1: Creating required directories... ===
 mkdir "%APPDATA%\interview-coder-v1\temp" 2>nul
 mkdir "%APPDATA%\interview-coder-v1\cache" 2>nul
 mkdir "%APPDATA%\interview-coder-v1\screenshots" 2>nul
 mkdir "%APPDATA%\interview-coder-v1\extra_screenshots" 2>nul
 
-echo 2. Building application...
+echo === Step 2: Cleaning previous builds... ===
+echo Removing old build files to ensure a fresh start...
+rmdir /s /q dist dist-electron 2>nul
+del /q .env 2>nul
+
+echo === Step 3: Building application... ===
+echo This may take a moment...
 call npm run build
 
-echo 3. Launching in stealth mode...
+echo === Step 4: Launching in stealth mode... ===
 echo Remember: Press Ctrl+B to make it visible, Ctrl+[ and Ctrl+] to adjust opacity!
 echo.
 set NODE_ENV=production
@@ -35,3 +41,7 @@ start /B cmd /c "npx electron ./dist-electron/main.js"
 
 echo App is now running invisibly! Press Ctrl+B to make it visible.
 echo.
+echo If you encounter any issues:
+echo 1. Make sure you've installed dependencies with 'npm install'
+echo 2. Press Ctrl+B multiple times to toggle visibility
+echo 3. Check Task Manager to verify the app is running

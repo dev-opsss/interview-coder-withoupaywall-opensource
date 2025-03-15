@@ -1,5 +1,23 @@
 # Interview Coder - Unlocked Edition - Changes
 
+## Major Architectural Changes
+
+### Removal of Supabase Authentication System
+1. **Complete Removal of Supabase Dependencies**:
+   - Removed all Supabase code, imports, and API calls
+   - Eliminated the authentication system completely
+   - Removed all subscription and payment-related code
+
+2. **Replaced with Local Configuration**:
+   - Added `ConfigHelper.ts` for local storage of settings
+   - Implemented direct OpenAI API integration
+   - Created a simplified settings system with model selection
+
+3. **User Interface Simplification**:
+   - Removed login/signup screens
+   - Added a welcome screen for new users
+   - Added comprehensive settings dialog for API key and model management
+
 ## Fixes and Improvements
 
 ### UI Improvements

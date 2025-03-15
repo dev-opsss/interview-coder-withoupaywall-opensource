@@ -492,12 +492,7 @@ function loadEnvVariables() {
     )
     dotenv.config({ path: path.join(process.resourcesPath, ".env") })
   }
-  console.log("Loaded environment variables:", {
-    VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL ? "exists" : "missing",
-    VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY
-      ? "exists"
-      : "missing"
-  })
+  console.log("Environment variables loaded for open-source version")
 }
 
 // Initialize application

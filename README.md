@@ -17,7 +17,7 @@ The best coding interview tools are often behind expensive paywalls, making them
 
 The codebase is designed to be adaptable:
 
-- **AI Models**: Though currently using OpenAI's models, you can modify the code to integrate with other providers like Claude, Deepseek, Llama, or any model with an API
+- **AI Models**: Though currently using OpenAI's models, you can modify the code to integrate with other providers like Claude, Deepseek, Llama, or any model with an API. All integration code is in `electron/ProcessingHelper.ts` and UI settings are in `src/components/Settings/SettingsDialog.tsx`.
 - **Languages**: Add support for additional programming languages
 - **Features**: Extend the functionality with new capabilities 
 - **UI**: Customize the interface to your preferences
@@ -84,7 +84,7 @@ Note: The application is **NOT** invisible to:
 
 ## Running the Application
 
-### Initial Setup
+### Quick Start
 
 1. Clone the repository:
 
@@ -99,59 +99,51 @@ cd interview-coder-unlocked
 npm install
 ```
 
-This will install all required npm packages including Electron, React, TypeScript, and other dependencies needed for the application.
-
-### Running in Stealth Mode
-
-For the best experience, follow these steps to run the application:
-
-1. First, clean any previous builds:
+3. **RECOMMENDED**: Clean any previous builds:
 
 ```bash
 npm run clean
 ```
 
-This command removes the `dist` and `dist-electron` directories to ensure a fresh build without any cached files or outdated components.
+4. Run the appropriate script for your platform:
 
-2. Then run the stealth-run batch file:
-
+**For Windows:**
 ```bash
 stealth-run.bat
 ```
 
-**What the stealth-run.bat does:**
-- Creates necessary directories in your AppData folder for storing screenshots and cache
-- Builds the application in production mode
-- Launches the application in stealth mode (invisible by default)
-- Provides a reminder of key shortcuts
-
-**IMPORTANT**: When using stealth-run.bat, the application window will be invisible by default! Use Ctrl+B (or Cmd+B on Mac) to toggle visibility.
-
-### Troubleshooting
-
-If you encounter any issues with the application:
-
-1. Always start with a clean build:
-
+**For macOS/Linux:**
 ```bash
-npm run clean
+# Make the script executable first
+chmod +x stealth-run.sh
+./stealth-run.sh
 ```
 
-2. Make sure you have the latest dependencies:
+**IMPORTANT**: The application window will be invisible by default! Use Ctrl+B (or Cmd+B on Mac) to toggle visibility.
 
-```bash
-npm install
-```
+**What the scripts do:**
+- Create necessary directories for the application
+- Clean previous builds to ensure a fresh start
+- Build the application in production mode
+- Launch the application in invisible mode
 
-3. If the window is invisible and keyboard shortcuts don't seem to work, try:
-   - Pressing Ctrl+B (or Cmd+B on Mac) multiple times
-   - Checking Task Manager/Activity Monitor to verify the application is running
-   - Restarting the application
+### Notes & Troubleshooting
+
+- **Window Manager Compatibility**: Some window management tools (like Rectangle Pro on macOS) may interfere with the app's window movement. Consider disabling them temporarily.
+
+- **API Usage**: Be mindful of your OpenAI API key's rate limits and credit usage. Vision API calls are more expensive than text-only calls.
+
+- **LLM Customization**: You can easily customize the app to include LLMs like Claude, Deepseek, or Grok by modifying the API calls in `ProcessingHelper.ts` and related UI components.
+
+- **Common Issues**:
+  - Run `npm run clean` before starting the app for a fresh build
+  - Use Ctrl+B/Cmd+B multiple times if the window doesn't appear
+  - Adjust window opacity with Ctrl+[/]/Cmd+[/] if needed
+  - For macOS: ensure script has execute permissions (`chmod +x stealth-run.sh`)
 
 ## Comparison with Paid Version of Interview Coder
 
 | Feature | Interview Coder (Paid) | Interview Coder Unlocked (This Project) |
-|---------|------------------------|----------------------------------------|
 | Price | $60/month subscription | Free (only pay for your API usage) |
 | Solution Generation | ✅ | ✅ |
 | Debugging Assistance | ✅ | ✅ |
@@ -206,30 +198,15 @@ npm install
    - Window remains invisible to specified screen sharing applications
    - Reset view using [Control or Cmd + R]
 
-## Using Custom AI Models
+## Adding More AI Models
 
-This application currently uses OpenAI's GPT models, but you can adapt it to work with other AI providers:
+This application is built with extensibility in mind. You can easily add support for additional LLMs alongside the existing OpenAI integration:
 
-### Integration Points
+- You can add Claude, Deepseek, Grok, or any other AI model as alternative options
+- The application architecture allows for multiple LLM backends to coexist
+- Users can have the freedom to choose their preferred AI provider
 
-The main integration point is in `electron/ProcessingHelper.ts`, which handles:
-
-1. **Problem Extraction**: Converting screenshots to text and understanding the problem
-2. **Solution Generation**: Creating optimized solutions with explanations
-3. **Debugging**: Analyzing code errors and providing improvement suggestions
-
-### Steps to Integrate Different Models
-
-1. Replace the OpenAI client initialization with your preferred AI provider's SDK
-2. Modify the API calls in `processScreenshotsHelper`, `generateSolutionsHelper`, and `processExtraScreenshotsHelper` methods
-3. Adjust prompt formats based on your chosen model's capabilities
-4. Update the UI components in `src/components/Settings/SettingsDialog.tsx` to reflect your model options
-
-Common alternative AI providers to consider:
-- Anthropic's Claude (good vision capabilities)
-- Deepseek (strong coding performance)
-- Self-hosted open-source models (Llama, Mixtral)
-- Azure OpenAI Service (same API but with Azure integration)
+To add new models, simply extend the API integration in `electron/ProcessingHelper.ts` and add the corresponding UI options in `src/components/Settings/SettingsDialog.tsx`. The modular design makes this straightforward without disrupting existing functionality.
 
 ## Configuration
 
