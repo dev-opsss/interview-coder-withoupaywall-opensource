@@ -89,8 +89,8 @@ Note: The application is **NOT** invisible to:
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/interview-coder-unlocked.git
-cd interview-coder-unlocked
+git clone https://github.com/greeneu/interview-coder-withoupaywall-opensource.git
+cd interview-coder-withoupaywall-opensource
 ```
 
 2. Install dependencies:
