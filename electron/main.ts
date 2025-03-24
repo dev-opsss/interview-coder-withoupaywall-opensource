@@ -345,8 +345,7 @@ async function createWindow(): Promise<void> {
   console.log(`Initial opacity from config: ${savedOpacity}`);
   
   // Always make sure window is shown first
-  state.mainWindow.show();
-  state.mainWindow.focus();
+  state.mainWindow.showInactive(); // Use showInactive for consistency
   
   if (savedOpacity <= 0.1) {
     console.log('Initial opacity too low, setting to 0 and hiding window');
@@ -407,11 +406,11 @@ function showMainWindow(): void {
       visibleOnFullScreen: true
     });
     state.mainWindow.setContentProtection(true);
-    state.mainWindow.show();
-    state.mainWindow.focus();
-    state.mainWindow.setOpacity(1);
+    state.mainWindow.setOpacity(0); // Set opacity to 0 before showing
+    state.mainWindow.showInactive(); // Use showInactive instead of show+focus
+    state.mainWindow.setOpacity(1); // Then set opacity to 1 after showing
     state.isWindowVisible = true;
-    console.log('Window shown, opacity set to 1');
+    console.log('Window shown with showInactive(), opacity set to 1');
   }
 }
 

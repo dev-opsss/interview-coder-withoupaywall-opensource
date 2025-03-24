@@ -1,8 +1,8 @@
-# Interview Coder - Unlocked Edition
+# CodeInterviewAssist
 
-## Free, Open-Source Alternative to Paid AI Interview Tools
+## Free, Open-Source AI-Powered Interview Preparation Tool
 
-This project offers a completely free alternative to premium AI interview coding tools like Interview Coder, AlgoExpert, and similar platforms. I've removed all paywalls, subscriptions, and user authentication – replacing them with a local backend that uses your own OpenAI API key.
+This project provides a powerful alternative to premium coding interview platforms. It delivers the core functionality of paid interview preparation tools but in a free, open-source package. Using your own OpenAI API key, you get access to advanced features like AI-powered problem analysis, solution generation, and debugging assistance - all running locally on your machine.
 
 ### Why This Exists
 
@@ -44,7 +44,7 @@ The application uses unidentifiable global keyboard shortcuts that won't be dete
 - Take Screenshot: [Control or Cmd + H]
 - Delete Last Screenshot: [Control or Cmd + L]
 - Process Screenshots: [Control or Cmd + Enter]
-- Reset View: [Control or Cmd + R]
+- Start New Problem: [Control or Cmd + R]
 - Quit: [Control or Cmd + Q]
 - Decrease Opacity: [Control or Cmd + []
 - Increase Opacity: [Control or Cmd + ]]
@@ -75,8 +75,8 @@ Note: The application is **NOT** invisible to:
 - Screen Recording Permission for Terminal/IDE
   - On macOS:
     1. Go to System Preferences > Security & Privacy > Privacy > Screen Recording
-    2. Ensure that Interview Coder has screen recording permission enabled
-    3. Restart Interview Coder after enabling permissions
+    2. Ensure that CodeInterviewAssist has screen recording permission enabled
+    3. Restart CodeInterviewAssist after enabling permissions
   - On Windows:
     - No additional permissions needed
   - On Linux:
@@ -141,9 +141,9 @@ chmod +x stealth-run.sh
   - Adjust window opacity with Ctrl+[/]/Cmd+[/] if needed
   - For macOS: ensure script has execute permissions (`chmod +x stealth-run.sh`)
 
-## Comparison with Paid Version of Interview Coder
+## Comparison with Paid Interview Tools
 
-| Feature | Interview Coder (Paid) | Interview Coder Unlocked (This Project) |
+| Feature | Premium Tools (Paid) | CodeInterviewAssist (This Project) |
 |---------|------------------------|----------------------------------------|
 | Price | $60/month subscription | Free (only pay for your API usage) |
 | Solution Generation | ✅ | ✅ |
@@ -197,7 +197,7 @@ chmod +x stealth-run.sh
    - Toggle visibility with [Control or Cmd + B]
    - Adjust opacity with [Control or Cmd + [] and [Control or Cmd + ]]
    - Window remains invisible to specified screen sharing applications
-   - Reset view using [Control or Cmd + R]
+   - Start a new problem using [Control or Cmd + R]
 
 ## Adding More AI Models
 
