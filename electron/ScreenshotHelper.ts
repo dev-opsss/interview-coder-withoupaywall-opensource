@@ -36,8 +36,8 @@ export class ScreenshotHelper {
     // Create directories if they don't exist
     this.ensureDirectoriesExist();
     
-    // Load any existing screenshots from disk
-    this.loadExistingScreenshots();
+    // Clean existing screenshot directories when starting the app
+    this.cleanScreenshotDirectories();
   }
   
   private ensureDirectoriesExist(): void {
@@ -55,35 +55,46 @@ export class ScreenshotHelper {
     }
   }
   
-  private loadExistingScreenshots(): void {
+  // This method replaces loadExistingScreenshots() to ensure we start with empty queues
+  private cleanScreenshotDirectories(): void {
     try {
-      // Load main queue screenshots
+      // Clean main screenshots directory
       if (fs.existsSync(this.screenshotDir)) {
         const files = fs.readdirSync(this.screenshotDir)
           .filter(file => file.endsWith('.png'))
-          .map(file => path.join(this.screenshotDir, file))
-          .sort((a, b) => {
-            return fs.statSync(a).mtime.getTime() - fs.statSync(b).mtime.getTime();
-          });
+          .map(file => path.join(this.screenshotDir, file));
         
-        this.screenshotQueue = files.slice(0, this.MAX_SCREENSHOTS);
-        console.log(`Loaded ${this.screenshotQueue.length} existing screenshots`);
+        // Delete each screenshot file
+        for (const file of files) {
+          try {
+            fs.unlinkSync(file);
+            console.log(`Deleted existing screenshot: ${file}`);
+          } catch (err) {
+            console.error(`Error deleting screenshot ${file}:`, err);
+          }
+        }
       }
       
-      // Load extra queue screenshots
+      // Clean extra screenshots directory
       if (fs.existsSync(this.extraScreenshotDir)) {
         const files = fs.readdirSync(this.extraScreenshotDir)
           .filter(file => file.endsWith('.png'))
-          .map(file => path.join(this.extraScreenshotDir, file))
-          .sort((a, b) => {
-            return fs.statSync(a).mtime.getTime() - fs.statSync(b).mtime.getTime();
-          });
+          .map(file => path.join(this.extraScreenshotDir, file));
         
-        this.extraScreenshotQueue = files.slice(0, this.MAX_SCREENSHOTS);
-        console.log(`Loaded ${this.extraScreenshotQueue.length} existing extra screenshots`);
+        // Delete each screenshot file
+        for (const file of files) {
+          try {
+            fs.unlinkSync(file);
+            console.log(`Deleted existing extra screenshot: ${file}`);
+          } catch (err) {
+            console.error(`Error deleting extra screenshot ${file}:`, err);
+          }
+        }
       }
+      
+      console.log("Screenshot directories cleaned successfully");
     } catch (err) {
-      console.error("Error loading existing screenshots:", err);
+      console.error("Error cleaning screenshot directories:", err);
     }
   }
 
