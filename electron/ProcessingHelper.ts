@@ -201,15 +201,6 @@ export class ProcessingHelper {
       if (!screenshotQueue || screenshotQueue.length === 0) {
         console.log("No screenshots found in queue");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        
-        // Show dialog if no screenshots
-        dialog.showMessageBox(mainWindow, {
-          type: 'info',
-          title: 'No Screenshots Detected',
-          message: 'No screenshots were found to process.',
-          detail: 'Please take a screenshot first using Ctrl+H (or Cmd+H on Mac). Make sure your screenshot contains the coding problem you want to solve.',
-          buttons: ['OK']
-        });
         return;
       }
 
@@ -218,15 +209,6 @@ export class ProcessingHelper {
       if (existingScreenshots.length === 0) {
         console.log("Screenshot files don't exist on disk");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        
-        // Show error dialog
-        dialog.showMessageBox(mainWindow, {
-          type: 'warning',
-          title: 'Screenshot Files Missing',
-          message: 'The screenshot files were not found on disk.',
-          detail: 'Try taking a new screenshot with Ctrl+H (or Cmd+H on Mac).',
-          buttons: ['OK']
-        });
         return;
       }
 
@@ -318,14 +300,6 @@ export class ProcessingHelper {
         console.log("No extra screenshots found in queue");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
         
-        // Show dialog if no screenshots
-        dialog.showMessageBox(mainWindow, {
-          type: 'info',
-          title: 'No Debug Screenshots',
-          message: 'No screenshots were found for debugging.',
-          detail: 'Please take screenshots of your code/errors with Ctrl+H before debugging.',
-          buttons: ['OK']
-        });
         return;
       }
 
@@ -334,14 +308,6 @@ export class ProcessingHelper {
       if (existingExtraScreenshots.length === 0) {
         console.log("Extra screenshot files don't exist on disk");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        
-        dialog.showMessageBox(mainWindow, {
-          type: 'warning',
-          title: 'Screenshot Files Missing',
-          message: 'The debug screenshot files were not found.',
-          detail: 'Try taking a new screenshot with Ctrl+H (or Cmd+H on Mac).',
-          buttons: ['OK']
-        });
         return;
       }
       
