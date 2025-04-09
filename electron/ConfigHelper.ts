@@ -77,7 +77,7 @@ export class ConfigHelper extends EventEmitter {
       return model;
     }  else if (provider === "anthropic") {
       // Only allow Claude models
-      const allowedModels = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'];
+      const allowedModels = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'];
       if (!allowedModels.includes(model)) {
         console.warn(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-7-sonnet-20250219`);
         return 'claude-3-7-sonnet-20250219';
