@@ -77,10 +77,10 @@ export class ConfigHelper extends EventEmitter {
       return model;
     }  else if (provider === "anthropic") {
       // Only allow Claude models
-      const allowedModels = ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'];
+      const allowedModels = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-opus-20240229`);
-        return 'claude-3-opus-20240229';
+        console.warn(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-7-sonnet-20250219`);
+        return 'claude-3-7-sonnet-20250219';
       }
       return model;
     }
@@ -175,9 +175,9 @@ export class ConfigHelper extends EventEmitter {
           updates.solutionModel = "gpt-4o";
           updates.debuggingModel = "gpt-4o";
         } else if (updates.apiProvider === "anthropic") {
-          updates.extractionModel = "claude-3-opus-20240229";
-          updates.solutionModel = "claude-3-opus-20240229";
-          updates.debuggingModel = "claude-3-opus-20240229";
+          updates.extractionModel = "claude-3-7-sonnet-20250219";
+          updates.solutionModel = "claude-3-7-sonnet-20250219";
+          updates.debuggingModel = "claude-3-7-sonnet-20250219";
         } else {
           updates.extractionModel = "gemini-2.0-flash";
           updates.solutionModel = "gemini-2.0-flash";
