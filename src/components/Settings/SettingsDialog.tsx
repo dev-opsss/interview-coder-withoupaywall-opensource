@@ -43,8 +43,8 @@ const modelCategories: ModelCategory[] = [
         description: "Best overall performance for problem extraction"
       },
       {
-        id: "gpt-4o-mini",
-        name: "gpt-4o-mini",
+        id: "o3-mini",
+        name: "o3-mini",
         description: "Faster, more cost-effective option"
       }
     ],
@@ -62,12 +62,12 @@ const modelCategories: ModelCategory[] = [
     ],
     anthropicModels: [
       {
-        id: "claude-3-opus-20240229",
-        name: "Claude 3 Opus",
+        id: "claude-3-7-sonnet-latest",
+        name: "Claude 3.7 Sonnet",
         description: "Best overall performance for problem extraction"
       },
       {
-        id: "claude-3-sonnet-20240229",
+        id: "claude-3-5-sonnet-20241022",
         name: "Claude 3 Sonnet",
         description: "Balanced performance and speed"
       },
@@ -89,8 +89,8 @@ const modelCategories: ModelCategory[] = [
         description: "Strong overall performance for coding tasks"
       },
       {
-        id: "gpt-4o-mini",
-        name: "gpt-4o-mini",
+        id: "o3-mini",
+        name: "o3-mini",
         description: "Faster, more cost-effective option"
       }
     ],
@@ -108,12 +108,12 @@ const modelCategories: ModelCategory[] = [
     ],
     anthropicModels: [
       {
-        id: "claude-3-opus-20240229",
-        name: "Claude 3 Opus",
+        id: "claude-3-7-sonnet-latest",
+        name: "Claude 3.7 Sonnet",
         description: "Strong overall performance for coding tasks"
       },
       {
-        id: "claude-3-sonnet-20240229",
+        id: "claude-3-5-sonnet-20241022",
         name: "Claude 3 Sonnet",
         description: "Balanced performance and speed"
       },
@@ -135,8 +135,8 @@ const modelCategories: ModelCategory[] = [
         description: "Best for analyzing code and error messages"
       },
       {
-        id: "gpt-4o-mini",
-        name: "gpt-4o-mini",
+        id: "o3-mini",
+        name: "o3-mini",
         description: "Faster, more cost-effective option"
       }
     ],
@@ -154,12 +154,12 @@ const modelCategories: ModelCategory[] = [
     ],
     anthropicModels: [
       {
-        id: "claude-3-opus-20240229",
-        name: "Claude 3 Opus",
+        id: "claude-3-7-sonnet-latest",
+        name: "Claude 3.7 Sonnet",
         description: "Best for analyzing code and error messages"
       },
       {
-        id: "claude-3-sonnet-20240229",
+        id: "claude-3-5-sonnet-20241022",
         name: "Claude 3 Sonnet",
         description: "Balanced performance and speed"
       },
@@ -248,9 +248,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       setSolutionModel("gemini-1.5-pro");
       setDebuggingModel("gemini-1.5-pro");
     } else if (provider === "anthropic") {
-      setExtractionModel("claude-3-opus-20240229");
-      setSolutionModel("claude-3-opus-20240229");
-      setDebuggingModel("claude-3-opus-20240229");
+      setExtractionModel("claude-3-7-sonnet-latest");
+      setSolutionModel("claude-3-7-sonnet-latest");
+      setDebuggingModel("claude-3-7-sonnet-latest");
     }
   };
 

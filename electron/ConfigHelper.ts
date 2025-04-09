@@ -60,8 +60,8 @@ export class ConfigHelper extends EventEmitter {
    */
   private sanitizeModelSelection(model: string, provider: "openai" | "gemini" | "anthropic"): string {
     if (provider === "openai") {
-      // Only allow gpt-4o and gpt-4o-mini for OpenAI
-      const allowedModels = ['gpt-4o', 'gpt-4o-mini'];
+      // Only allow gpt-4o and o3-mini for OpenAI
+      const allowedModels = ['gpt-4o', 'o3-mini'];
       if (!allowedModels.includes(model)) {
         console.warn(`Invalid OpenAI model specified: ${model}. Using default model: gpt-4o`);
         return 'gpt-4o';
@@ -77,10 +77,10 @@ export class ConfigHelper extends EventEmitter {
       return model;
     }  else if (provider === "anthropic") {
       // Only allow Claude models
-      const allowedModels = ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'];
+      const allowedModels = ['claude-3-7-sonnet-latest', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-opus-20240229`);
-        return 'claude-3-opus-20240229';
+        console.warn(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-7-sonnet-latest`);
+        return 'claude-3-7-sonnet-latest';
       }
       return model;
     }
@@ -175,9 +175,9 @@ export class ConfigHelper extends EventEmitter {
           updates.solutionModel = "gpt-4o";
           updates.debuggingModel = "gpt-4o";
         } else if (updates.apiProvider === "anthropic") {
-          updates.extractionModel = "claude-3-opus-20240229";
-          updates.solutionModel = "claude-3-opus-20240229";
-          updates.debuggingModel = "claude-3-opus-20240229";
+          updates.extractionModel = "claude-3-7-sonnet-latest";
+          updates.solutionModel = "claude-3-7-sonnet-latest";
+          updates.debuggingModel = "claude-3-7-sonnet-latest";
         } else {
           updates.extractionModel = "gemini-2.0-flash";
           updates.solutionModel = "gemini-2.0-flash";
