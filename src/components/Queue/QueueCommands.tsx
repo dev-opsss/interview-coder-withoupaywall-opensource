@@ -386,13 +386,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                           className="flex items-center justify-between cursor-pointer hover:bg-white/10 rounded px-2 py-1 transition-colors"
                           onClick={() => {
                             // Create a hidden instance of LanguageSelector to extract languages
-                            const tempDiv = document.createElement('div');
-                            tempDiv.style.position = 'absolute';
-                            tempDiv.style.left = '-9999px';
-                            document.body.appendChild(tempDiv);
+                            const hiddenRenderContainer = document.createElement('div');
+                            hiddenRenderContainer.style.position = 'absolute';
+                            hiddenRenderContainer.style.left = '-9999px';
+                            document.body.appendChild(hiddenRenderContainer);
                             
                             // Create a root and render the LanguageSelector temporarily
-                            const root = createRoot(tempDiv);
+                            const root = createRoot(hiddenRenderContainer);
                             root.render(
                               <LanguageSelector 
                                 currentLanguage={currentLanguage} 
@@ -403,7 +403,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                             // Use setTimeout to ensure the component has rendered
                             setTimeout(() => {
                               // Extract options from the rendered select element
-                              const selectElement = tempDiv.querySelector('select');
+                              const selectElement = hiddenRenderContainer.querySelector('select');
                               if (selectElement) {
                                 const options = Array.from(selectElement.options);
                                 const values = options.map(opt => opt.value);
@@ -419,7 +419,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                               
                               // Clean up
                               root.unmount();
-                              document.body.removeChild(tempDiv);
+                              document.body.removeChild(hiddenRenderContainer);
                             }, 0);
                           }}
                           tabIndex={0}
@@ -428,13 +428,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                                 e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                               
                               // Create a hidden instance of LanguageSelector to extract languages
-                              const tempDiv = document.createElement('div');
-                              tempDiv.style.position = 'absolute';
-                              tempDiv.style.left = '-9999px';
-                              document.body.appendChild(tempDiv);
+                              const hiddenRenderContainer = document.createElement('div');
+                              hiddenRenderContainer.style.position = 'absolute';
+                              hiddenRenderContainer.style.left = '-9999px';
+                              document.body.appendChild(hiddenRenderContainer);
                               
                               // Create a root and render the LanguageSelector temporarily
-                              const root = createRoot(tempDiv);
+                              const root = createRoot(hiddenRenderContainer);
                               root.render(
                                 <LanguageSelector 
                                   currentLanguage={currentLanguage} 
@@ -445,7 +445,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                               // Use setTimeout to ensure the component has rendered
                               setTimeout(() => {
                                 // Extract options from the rendered select element
-                                const selectElement = tempDiv.querySelector('select');
+                                const selectElement = hiddenRenderContainer.querySelector('select');
                                 if (selectElement) {
                                   const options = Array.from(selectElement.options);
                                   const values = options.map(opt => opt.value);
@@ -470,7 +470,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                                 
                                 // Clean up
                                 root.unmount();
-                                document.body.removeChild(tempDiv);
+                                document.body.removeChild(hiddenRenderContainer);
                               }, 0);
                             }
                           }}
