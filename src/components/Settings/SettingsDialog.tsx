@@ -72,9 +72,9 @@ const modelCategories: ModelCategory[] = [
         description: "Balanced performance and speed"
       },
       {
-        id: "claude-3-haiku-20240307",
-        name: "Claude 3 Haiku",
-        description: "Fastest, most cost-effective option"
+        id: "claude-3-opus-20240229",
+        name: "Claude 3 Opus",
+        description: "Top-level intelligence, fluency, and understanding"
       }
     ]
   },
@@ -118,9 +118,9 @@ const modelCategories: ModelCategory[] = [
         description: "Balanced performance and speed"
       },
       {
-        id: "claude-3-haiku-20240307",
-        name: "Claude 3 Haiku",
-        description: "Faster, more cost-effective option"
+        id: "claude-3-opus-20240229",
+        name: "Claude 3 Opus",
+        description: "Top-level intelligence, fluency, and understanding"
       }
     ]
   },
@@ -164,9 +164,9 @@ const modelCategories: ModelCategory[] = [
         description: "Balanced performance and speed"
       },
       {
-        id: "claude-3-haiku-20240307",
-        name: "Claude 3 Haiku",
-        description: "Faster, more cost-effective option"
+        id: "claude-3-opus-20240229",
+        name: "Claude 3 Opus",
+        description: "Top-level intelligence, fluency, and understanding"
       }
     ]
   }
