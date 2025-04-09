@@ -68,7 +68,7 @@ const modelCategories: ModelCategory[] = [
       },
       {
         id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3 Sonnet",
+        name: "Claude 3.5 Sonnet",
         description: "Balanced performance and speed"
       },
       {
@@ -114,7 +114,7 @@ const modelCategories: ModelCategory[] = [
       },
       {
         id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3 Sonnet",
+        name: "Claude 3.5 Sonnet",
         description: "Balanced performance and speed"
       },
       {
@@ -160,7 +160,7 @@ const modelCategories: ModelCategory[] = [
       },
       {
         id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3 Sonnet",
+        name: "Claude 3.5 Sonnet",
         description: "Balanced performance and speed"
       },
       {
