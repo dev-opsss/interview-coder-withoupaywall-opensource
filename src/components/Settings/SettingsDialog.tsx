@@ -43,8 +43,8 @@ const modelCategories: ModelCategory[] = [
         description: "Best overall performance for problem extraction"
       },
       {
-        id: "o3-mini",
-        name: "o3-mini",
+        id: "gpt-4o-mini",
+        name: "gpt-4o-mini",
         description: "Faster, more cost-effective option"
       }
     ],
@@ -89,8 +89,8 @@ const modelCategories: ModelCategory[] = [
         description: "Strong overall performance for coding tasks"
       },
       {
-        id: "o3-mini",
-        name: "o3-mini",
+        id: "gpt-4o-mini",
+        name: "gpt-4o-mini",
         description: "Faster, more cost-effective option"
       }
     ],
@@ -135,8 +135,8 @@ const modelCategories: ModelCategory[] = [
         description: "Best for analyzing code and error messages"
       },
       {
-        id: "o3-mini",
-        name: "o3-mini",
+        id: "gpt-4o-mini",
+        name: "gpt-4o-mini",
         description: "Faster, more cost-effective option"
       }
     ],
