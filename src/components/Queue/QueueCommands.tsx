@@ -400,7 +400,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                               />
                             );
                             
-                            // Use setTimeout to ensure the component has rendered
+                            // Use a small delay to ensure the component has rendered
+                            // 50ms is generally enough for React to complete a render cycle
                             setTimeout(() => {
                               // Extract options from the rendered select element
                               const selectElement = hiddenRenderContainer.querySelector('select');
@@ -420,7 +421,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                               // Clean up
                               root.unmount();
                               document.body.removeChild(hiddenRenderContainer);
-                            }, 0);
+                            }, 50); // Increased timeout to ensure render completes
                           }}
                           tabIndex={0}
                           onKeyDown={(e) => {
@@ -442,7 +443,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                                 />
                               );
                               
-                              // Use setTimeout to ensure the component has rendered
+                              // Use a small delay to ensure the component has rendered
+                              // 50ms is generally enough for React to complete a render cycle
                               setTimeout(() => {
                                 // Extract options from the rendered select element
                                 const selectElement = hiddenRenderContainer.querySelector('select');
@@ -471,7 +473,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                                 // Clean up
                                 root.unmount();
                                 document.body.removeChild(hiddenRenderContainer);
-                              }, 0);
+                              }, 50); // Increased timeout to ensure render completes
                             }
                           }}
                         >
