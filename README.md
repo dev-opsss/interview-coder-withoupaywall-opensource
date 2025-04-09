@@ -57,7 +57,7 @@ All it takes is modest JavaScript/TypeScript knowledge and understanding of the 
 - 💡 Solution Generation: Get detailed explanations and solutions with time/space complexity analysis
 - 🔧 Real-time Debugging: Debug your code with AI assistance and structured feedback
 - 🎨 Advanced Window Management: Freely move, resize, change opacity, and zoom the window
-- 🔄 Model Selection: Choose between GPT-4o and gpt-4o-mini for different processing stages
+- 🔄 Model Selection: Choose between GPT-4o and GPT-4o-mini for different processing stages
 - 🔒 Privacy-Focused: Your API key and data never leave your computer except for OpenAI API calls
 
 ## Global Commands
@@ -261,7 +261,7 @@ To add new models, simply extend the API integration in `electron/ProcessingHelp
 ## Configuration
 
 - **OpenAI API Key**: Your personal API key is stored locally and only used for API calls to OpenAI
-- **Model Selection**: You can choose between GPT-4o and gpt-4o-mini for each stage of processing:
+- **Model Selection**: You can choose between GPT-4o and GPT-4o-mini for each stage of processing:
   - Problem Extraction: Analyzes screenshots to understand the coding problem
   - Solution Generation: Creates optimized solutions with explanations
   - Debugging: Provides detailed analysis of errors and improvement suggestions
