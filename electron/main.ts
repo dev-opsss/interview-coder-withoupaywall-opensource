@@ -8,6 +8,7 @@ import { ShortcutsHelper } from "./shortcuts"
 import { initAutoUpdater } from "./autoUpdater"
 import { configHelper } from "./ConfigHelper"
 import * as dotenv from "dotenv"
+import { VoiceTranscriptionService } from './VoiceTranscriptionService';
 
 // Constants
 const isDev = process.env.NODE_ENV === "development"
@@ -554,6 +555,9 @@ async function initializeApp() {
     await createWindow()
     state.shortcutsHelper?.registerGlobalShortcuts()
 
+    // Initialize voice transcription service after window is created
+    app.whenReady().then(initializeApp)
+
     // Initialize auto-updater regardless of environment
     initAutoUpdater()
     console.log(
@@ -703,4 +707,24 @@ export {
   getHasDebugged
 }
 
+// Replace this:
+// Inside initializeApp function, remove this line:
 app.whenReady().then(initializeApp)
+
+// Initialize voice transcription service
+// Fix: Use getMainWindow() function instead of undefined mainWindow variable
+const voiceTranscriptionService = new VoiceTranscriptionService(getMainWindow());
+
+// With this:
+app.whenReady().then(() => {
+  initializeApp().then(() => {
+    // Initialize voice transcription service after app is ready and window is created
+    const voiceTranscriptionService = new VoiceTranscriptionService(getMainWindow());
+  });
+});
+
+// Remove this duplicate handler at the bottom of the file
+// Look for another instance of:
+ipcMain.handle('get-config', async () => {
+  // More config handling code
+});

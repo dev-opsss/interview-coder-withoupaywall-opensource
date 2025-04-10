@@ -5,6 +5,7 @@ import { app } from "electron"
 import { EventEmitter } from "events"
 import { OpenAI } from "openai"
 
+// Add voice-related settings to your config interface
 interface Config {
   apiKey: string;
   apiProvider: "openai" | "gemini" | "anthropic";  // Added provider selection
@@ -13,6 +14,7 @@ interface Config {
   debuggingModel: string;
   language: string;
   opacity: number;
+  autoPrompt?: boolean;
 }
 
 export class ConfigHelper extends EventEmitter {

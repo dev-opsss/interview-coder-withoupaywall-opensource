@@ -1,0 +1,22 @@
+{
+  "files": [
+    "dist-electron",
+    "dist"
+  ],
+  "extraResources": [
+    {
+      "from": "resources",
+      "to": "resources"
+    }
+  ],
+  "directories": {
+    "output": "release",
+    "buildResources": "resources"
+  },
+  "mac": {
+    "target": ["dmg", "zip"],
+    "category": "public.app-category.developer-tools",
+    "hardenedRuntime": true
+  },
+  "afterSign": "scripts/notarize.js"
+}

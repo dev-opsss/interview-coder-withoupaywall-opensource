@@ -63,9 +63,16 @@ export interface ElectronAPI {
   removeListener: (eventName: string, callback: (...args: any[]) => void) => void
 }
 
+export interface VoiceAPI {
+  invoke: (channel: string, ...args: any[]) => Promise<any>;
+  on: (channel: string, callback: (...args: any[]) => void) => () => void;
+  removeAllListeners: (channel: string) => void;
+}
+
 declare global {
   interface Window {
     electronAPI: ElectronAPI
+    voiceAPI: VoiceAPI  // Add the voiceAPI to the Window interface
     electron: {
       ipcRenderer: {
         on: (channel: string, func: (...args: any[]) => void) => void

@@ -184,6 +184,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const [extractionModel, setExtractionModel] = useState("gpt-4o");
   const [solutionModel, setSolutionModel] = useState("gpt-4o");
   const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
+  const [autoPrompt, setAutoPrompt] = useState(false); // Add this state for voice transcription
   const [isLoading, setIsLoading] = useState(false);
   const { showToast } = useToast();
 
@@ -213,6 +214,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         extractionModel?: string;
         solutionModel?: string;
         debuggingModel?: string;
+        autoPrompt?: boolean; // Add this to the Config interface
       }
 
       window.electronAPI
@@ -223,6 +225,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           setExtractionModel(config.extractionModel || "gpt-4o");
           setSolutionModel(config.solutionModel || "gpt-4o");
           setDebuggingModel(config.debuggingModel || "gpt-4o");
+          setAutoPrompt(config.autoPrompt || false); // Load autoPrompt setting
         })
         .catch((error: unknown) => {
           console.error("Failed to load config:", error);
@@ -263,6 +266,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         extractionModel,
         solutionModel,
         debuggingModel,
+        autoPrompt, // Add this to save the autoPrompt setting
       });
       
       if (result) {
@@ -496,6 +500,51 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 
                 <div className="text-white/70">Zoom In</div>
                 <div className="text-white/90 font-mono">Ctrl+= / Cmd+=</div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Voice Transcription Settings */}
+          <div className="space-y-2 mt-4">
+            <label className="text-sm font-medium text-white mb-2 block">Voice Transcription</label>
+            <div className="bg-black/30 border border-white/10 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-sm text-white/90">Auto-send voice messages</p>
+                  <p className="text-xs text-white/60">Automatically send messages after voice transcription</p>
+                </div>
+                <div className="relative inline-block w-10 align-middle select-none">
+                  <input 
+                    type="checkbox" 
+                    id="auto-prompt"
+                    checked={autoPrompt}
+                    onChange={(e) => setAutoPrompt(e.target.checked)}
+                    className="sr-only"
+                  />
+                  <label 
+                    htmlFor="auto-prompt"
+                    className={`block overflow-hidden h-6 rounded-full cursor-pointer transition-colors ${
+                      autoPrompt ? 'bg-blue-500' : 'bg-white/20'
+                    }`}
+                  >
+                    <span 
+                      className={`block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${
+                        autoPrompt ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                      style={{ margin: '2px' }}
+                    />
+                  </label>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-white/90">Voice transcription shortcut</p>
+                  <p className="text-xs text-white/60">Start/stop voice recording</p>
+                </div>
+                <div className="text-white/90 font-mono text-xs">
+                  Ctrl+V / Cmd+V
+                </div>
               </div>
             </div>
           </div>

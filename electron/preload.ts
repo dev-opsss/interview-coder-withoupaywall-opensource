@@ -81,11 +81,10 @@ const electronAPI = {
     }
   },
   onDebugSuccess: (callback: (data: any) => void) => {
-    ipcRenderer.on("debug-success", (_event, data) => callback(data))
+    const subscription = (_event: any, data: any) => callback(data)
+    ipcRenderer.on("debug-success", subscription)
     return () => {
-      ipcRenderer.removeListener("debug-success", (_event, data) =>
-        callback(data)
-      )
+      ipcRenderer.removeListener("debug-success", subscription)
     }
   },
   onDebugError: (callback: (error: string) => void) => {
@@ -248,6 +247,9 @@ console.log(
 // Expose the API
 contextBridge.exposeInMainWorld("electronAPI", electronAPI)
 
+// Remove this duplicate exposure that's causing issues
+// contextBridge.exposeInMainWorld('electron', {...})
+
 console.log("electronAPI exposed to window")
 
 // Add this focus restoration handler
@@ -259,4 +261,43 @@ ipcRenderer.on("restore-focus", () => {
   }
 })
 
-// Remove auth-callback handling - no longer needed
+// Add these methods for voice transcription
+contextBridge.exposeInMainWorld("voiceAPI", {
+  invoke: (channel: string, ...args: any[]) => {
+    const validChannels = [
+      'start-recording',
+      'stop-recording',
+      'transcribe-audio'
+    ];
+    if (validChannels.includes(channel)) {
+      return ipcRenderer.invoke(channel, ...args);
+    }
+    return Promise.reject(new Error(`Unauthorized IPC channel: ${channel}`));
+  },
+  on: (channel: string, callback: (...args: any[]) => void) => {
+    const validChannels = [
+      'transcription-result',
+      'recording-status'  // Add this to receive recording status updates
+    ];
+    if (validChannels.includes(channel)) {
+      // Deliberately strip event as it includes `sender` 
+      const subscription = (_event: Electron.IpcRendererEvent, ...args: any[]) => 
+        callback(...args);
+      ipcRenderer.on(channel, subscription);
+      
+      return () => {
+        ipcRenderer.removeListener(channel, subscription);
+      };
+    }
+    return () => {}; // Return empty function for invalid channels
+  },
+  removeAllListeners: (channel: string) => {
+    const validChannels = [
+      'transcription-result',
+      'recording-status'  // Add this to match the above
+    ];
+    if (validChannels.includes(channel)) {
+      ipcRenderer.removeAllListeners(channel);
+    }
+  }
+});
