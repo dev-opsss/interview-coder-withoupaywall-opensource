@@ -43,7 +43,11 @@ export default defineConfig({
     strictPort: true,
     watch: {
       usePolling: true
-    }
+    },
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
   },
   build: {
     outDir: "dist",
@@ -54,5 +58,5 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src")
     }
-  }
+  },
 })

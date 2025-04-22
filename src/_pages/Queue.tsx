@@ -21,13 +21,19 @@ interface QueueProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
+  isMicActive: boolean
+  onToggleVoice: () => void
+  onToggleChat: () => void
 }
 
 const Queue: React.FC<QueueProps> = ({
   setView,
   credits,
   currentLanguage,
-  setLanguage
+  setLanguage,
+  isMicActive,
+  onToggleVoice,
+  onToggleChat
 }) => {
   const { showToast } = useToast()
 
@@ -152,6 +158,9 @@ const Queue: React.FC<QueueProps> = ({
             credits={credits}
             currentLanguage={currentLanguage}
             setLanguage={setLanguage}
+            isMicActive={isMicActive}
+            onToggleVoice={onToggleVoice}
+            onToggleChat={onToggleChat}
           />
         </div>
       </div>

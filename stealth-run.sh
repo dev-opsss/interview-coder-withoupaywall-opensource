@@ -32,7 +32,7 @@ rm -f .env
 
 echo "=== Step 3: Building application... ==="
 echo "This may take a moment..."
-npm run build
+npm run clean && npm run build
 
 echo "=== Step 4: Launching in stealth mode... ==="
 echo "Remember: Cmd+B to make it visible, Cmd+[ and Cmd+] to adjust opacity!"

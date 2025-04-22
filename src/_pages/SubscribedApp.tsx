@@ -9,12 +9,18 @@ interface SubscribedAppProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
+  isMicActive: boolean
+  onToggleVoice: () => void
+  onToggleChat: () => void
 }
 
 const SubscribedApp: React.FC<SubscribedAppProps> = ({
   credits,
   currentLanguage,
-  setLanguage
+  setLanguage,
+  isMicActive,
+  onToggleVoice,
+  onToggleChat
 }) => {
   const queryClient = useQueryClient()
   const [view, setView] = useState<"queue" | "solutions" | "debug">("queue")
@@ -142,6 +148,9 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
           credits={credits}
           currentLanguage={currentLanguage}
           setLanguage={setLanguage}
+          isMicActive={isMicActive}
+          onToggleVoice={onToggleVoice}
+          onToggleChat={onToggleChat}
         />
       ) : view === "solutions" ? (
         <Solutions

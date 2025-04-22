@@ -8,6 +8,64 @@ import { app, BrowserWindow, dialog } from "electron"
 import { OpenAI } from "openai"
 import { configHelper } from "./ConfigHelper"
 import Anthropic from '@anthropic-ai/sdk';
+import FormData from 'form-data';
+
+// Safe console logging to prevent EPIPE errors
+const safeLog = (...args: any[]) => {
+  try {
+    console.log(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`Error during logging: ${error?.message || String(error)}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
+
+// Safe error logging
+const safeError = (...args: any[]) => {
+  try {
+    console.error(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`ERROR: ${args.map(a => String(a)).join(' ')}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
+
+// Safe warning logging
+const safeWarn = (...args: any[]) => {
+  try {
+    console.warn(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`WARNING: ${args.map(a => String(a)).join(' ')}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
 
 // Interface for Gemini API requests
 interface GeminiMessage {
@@ -83,12 +141,12 @@ export class ProcessingHelper {
           });
           this.geminiApiKey = null;
           this.anthropicClient = null;
-          console.log("OpenAI client initialized successfully");
+          safeLog("OpenAI client initialized successfully");
         } else {
           this.openaiClient = null;
           this.geminiApiKey = null;
           this.anthropicClient = null;
-          console.warn("No API key available, OpenAI client not initialized");
+          safeLog("No API key available, OpenAI client not initialized");
         }
       } else if (config.apiProvider === "gemini"){
         // Gemini client initialization
@@ -96,12 +154,12 @@ export class ProcessingHelper {
         this.anthropicClient = null;
         if (config.apiKey) {
           this.geminiApiKey = config.apiKey;
-          console.log("Gemini API key set successfully");
+          safeLog("Gemini API key set successfully");
         } else {
           this.openaiClient = null;
           this.geminiApiKey = null;
           this.anthropicClient = null;
-          console.warn("No API key available, Gemini client not initialized");
+          safeLog("No API key available, Gemini client not initialized");
         }
       } else if (config.apiProvider === "anthropic") {
         // Reset other clients
@@ -113,16 +171,16 @@ export class ProcessingHelper {
             timeout: 60000,
             maxRetries: 2
           });
-          console.log("Anthropic client initialized successfully");
+          safeLog("Anthropic client initialized successfully");
         } else {
           this.openaiClient = null;
           this.geminiApiKey = null;
           this.anthropicClient = null;
-          console.warn("No API key available, Anthropic client not initialized");
+          safeLog("No API key available, Anthropic client not initialized");
         }
       }
     } catch (error) {
-      console.error("Failed to initialize AI client:", error);
+      safeError("Failed to initialize AI client:", error);
       this.openaiClient = null;
       this.geminiApiKey = null;
       this.anthropicClient = null;
@@ -154,7 +212,7 @@ export class ProcessingHelper {
       await this.waitForInitialization(mainWindow)
       return 999 // Always return sufficient credits to work
     } catch (error) {
-      console.error("Error getting credits:", error)
+      safeError("Error getting credits:", error)
       return 999 // Unlimited credits as fallback
     }
   }
@@ -184,14 +242,14 @@ export class ProcessingHelper {
             return language;
           }
         } catch (err) {
-          console.warn("Could not get language from window", err);
+          safeWarn("Could not get language from window", err);
         }
       }
       
       // Default fallback
       return "python";
     } catch (error) {
-      console.error("Error getting language:", error)
+      safeError("Error getting language:", error)
       return "python"
     }
   }
@@ -207,7 +265,7 @@ export class ProcessingHelper {
       this.initializeAIClient();
       
       if (!this.openaiClient) {
-        console.error("OpenAI client not initialized");
+        safeError("OpenAI client not initialized");
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.API_KEY_INVALID
         );
@@ -217,7 +275,7 @@ export class ProcessingHelper {
       this.initializeAIClient();
       
       if (!this.geminiApiKey) {
-        console.error("Gemini API key not initialized");
+        safeError("Gemini API key not initialized");
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.API_KEY_INVALID
         );
@@ -228,7 +286,7 @@ export class ProcessingHelper {
       this.initializeAIClient();
       
       if (!this.anthropicClient) {
-        console.error("Anthropic client not initialized");
+        safeError("Anthropic client not initialized");
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.API_KEY_INVALID
         );
@@ -237,16 +295,16 @@ export class ProcessingHelper {
     }
 
     const view = this.deps.getView()
-    console.log("Processing screenshots in view:", view)
+    safeLog("Processing screenshots in view:", view)
 
     if (view === "queue") {
       mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.INITIAL_START)
       const screenshotQueue = this.screenshotHelper.getScreenshotQueue()
-      console.log("Processing main queue screenshots:", screenshotQueue)
+      safeLog("Processing main queue screenshots:", screenshotQueue)
       
       // Check if the queue is empty
       if (!screenshotQueue || screenshotQueue.length === 0) {
-        console.log("No screenshots found in queue");
+        safeLog("No screenshots found in queue");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
         return;
       }
@@ -254,7 +312,7 @@ export class ProcessingHelper {
       // Check that files actually exist
       const existingScreenshots = screenshotQueue.filter(path => fs.existsSync(path));
       if (existingScreenshots.length === 0) {
-        console.log("Screenshot files don't exist on disk");
+        safeLog("Screenshot files don't exist on disk");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
         return;
       }
@@ -273,7 +331,7 @@ export class ProcessingHelper {
                 data: fs.readFileSync(path).toString('base64')
               };
             } catch (err) {
-              console.error(`Error reading screenshot ${path}:`, err);
+              safeError(`Error reading screenshot ${path}:`, err);
               return null;
             }
           })
@@ -289,7 +347,7 @@ export class ProcessingHelper {
         const result = await this.processScreenshotsHelper(validScreenshots, signal)
 
         if (!result.success) {
-          console.log("Processing failed:", result.error)
+          safeError("Processing failed:", result.error)
           if (result.error?.includes("API Key") || result.error?.includes("OpenAI") || result.error?.includes("Gemini")) {
             mainWindow.webContents.send(
               this.deps.PROCESSING_EVENTS.API_KEY_INVALID
@@ -301,13 +359,13 @@ export class ProcessingHelper {
             )
           }
           // Reset view back to queue on error
-          console.log("Resetting view to queue due to error")
+          safeLog("Resetting view to queue due to error")
           this.deps.setView("queue")
           return
         }
 
         // Only set view to solutions if processing succeeded
-        console.log("Setting view to solutions after successful processing")
+        safeLog("Setting view to solutions after successful processing")
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
           result.data
@@ -318,7 +376,7 @@ export class ProcessingHelper {
           this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
           error
         )
-        console.error("Processing error:", error)
+        safeError("Processing error:", error)
         if (axios.isCancel(error)) {
           mainWindow.webContents.send(
             this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
@@ -331,7 +389,7 @@ export class ProcessingHelper {
           )
         }
         // Reset view back to queue on error
-        console.log("Resetting view to queue due to error")
+        safeLog("Resetting view to queue due to error")
         this.deps.setView("queue")
       } finally {
         this.currentProcessingAbortController = null
@@ -340,11 +398,11 @@ export class ProcessingHelper {
       // view == 'solutions'
       const extraScreenshotQueue =
         this.screenshotHelper.getExtraScreenshotQueue()
-      console.log("Processing extra queue screenshots:", extraScreenshotQueue)
+      safeLog("Processing extra queue screenshots:", extraScreenshotQueue)
       
       // Check if the extra queue is empty
       if (!extraScreenshotQueue || extraScreenshotQueue.length === 0) {
-        console.log("No extra screenshots found in queue");
+        safeLog("No extra screenshots found in queue");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
         
         return;
@@ -353,7 +411,7 @@ export class ProcessingHelper {
       // Check that files actually exist
       const existingExtraScreenshots = extraScreenshotQueue.filter(path => fs.existsSync(path));
       if (existingExtraScreenshots.length === 0) {
-        console.log("Extra screenshot files don't exist on disk");
+        safeLog("Extra screenshot files don't exist on disk");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
         return;
       }
@@ -375,7 +433,7 @@ export class ProcessingHelper {
           allPaths.map(async (path) => {
             try {
               if (!fs.existsSync(path)) {
-                console.warn(`Screenshot file does not exist: ${path}`);
+                safeWarn(`Screenshot file does not exist: ${path}`);
                 return null;
               }
               
@@ -385,7 +443,7 @@ export class ProcessingHelper {
                 data: fs.readFileSync(path).toString('base64')
               };
             } catch (err) {
-              console.error(`Error reading screenshot ${path}:`, err);
+              safeError(`Error reading screenshot ${path}:`, err);
               return null;
             }
           })
@@ -398,7 +456,7 @@ export class ProcessingHelper {
           throw new Error("Failed to load screenshot data for debugging");
         }
         
-        console.log(
+        safeLog(
           "Combined screenshots for processing:",
           validScreenshots.map((s) => s.path)
         )
@@ -509,7 +567,7 @@ export class ProcessingHelper {
           const jsonText = responseText.replace(/```json|```/g, '').trim();
           problemInfo = JSON.parse(jsonText);
         } catch (error) {
-          console.error("Error parsing OpenAI response:", error);
+          safeError("Error parsing OpenAI response:", error);
           return {
             success: false,
             error: "Failed to parse problem information. Please try again or use clearer screenshots."
@@ -568,7 +626,7 @@ export class ProcessingHelper {
           const jsonText = responseText.replace(/```json|```/g, '').trim();
           problemInfo = JSON.parse(jsonText);
         } catch (error) {
-          console.error("Error using Gemini API:", error);
+          safeError("Error using Gemini API:", error);
           return {
             success: false,
             error: "Failed to process with Gemini API. Please check your API key or try again later."
@@ -614,7 +672,7 @@ export class ProcessingHelper {
           const jsonText = responseText.replace(/```json|```/g, '').trim();
           problemInfo = JSON.parse(jsonText);
         } catch (error: any) {
-          console.error("Error using Anthropic API:", error);
+          safeError("Error using Anthropic API:", error);
 
           // Add specific handling for Claude's limitations
           if (error.status === 429) {
@@ -706,7 +764,7 @@ export class ProcessingHelper {
         };
       }
 
-      console.error("API Error Details:", error);
+      safeError("API Error Details:", error);
       return { 
         success: false, 
         error: error.message || "Failed to process screenshots. Please try again." 
@@ -828,7 +886,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
           
           responseContent = responseData.candidates[0].content.parts[0].text;
         } catch (error) {
-          console.error("Error using Gemini API for solution:", error);
+          safeError("Error using Gemini API for solution:", error);
           return {
             success: false,
             error: "Failed to generate solution with Gemini API. Please check your API key or try again later."
@@ -866,7 +924,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
 
           responseContent = (response.content[0] as { type: 'text', text: string }).text;
         } catch (error: any) {
-          console.error("Error using Anthropic API for solution:", error);
+          safeError("Error using Anthropic API for solution:", error);
 
           // Add specific handling for Claude's limitations
           if (error.status === 429) {
@@ -977,7 +1035,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
         };
       }
       
-      console.error("Solution generation error:", error);
+      safeError("Solution generation error:", error);
       return { success: false, error: error.message || "Failed to generate solution" };
     }
   }
@@ -1149,7 +1207,7 @@ If you include code examples, use proper markdown code blocks with language spec
           
           debugContent = responseData.candidates[0].content.parts[0].text;
         } catch (error) {
-          console.error("Error using Gemini API for debugging:", error);
+          safeError("Error using Gemini API for debugging:", error);
           return {
             success: false,
             error: "Failed to process debug request with Gemini API. Please check your API key or try again later."
@@ -1224,7 +1282,7 @@ If you include code examples, use proper markdown code blocks with language spec
           
           debugContent = (response.content[0] as { type: 'text', text: string }).text;
         } catch (error: any) {
-          console.error("Error using Anthropic API for debugging:", error);
+          safeError("Error using Anthropic API for debugging:", error);
           
           // Add specific handling for Claude's limitations
           if (error.status === 429) {
@@ -1285,7 +1343,7 @@ If you include code examples, use proper markdown code blocks with language spec
 
       return { success: true, data: response };
     } catch (error: any) {
-      console.error("Debug processing error:", error);
+      safeError("Debug processing error:", error);
       return { success: false, error: error.message || "Failed to process debug request" };
     }
   }
@@ -1312,6 +1370,263 @@ If you include code examples, use proper markdown code blocks with language spec
     const mainWindow = this.deps.getMainWindow()
     if (wasCancelled && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS)
+    }
+  }
+
+  // Add a new method for handling simple text queries
+  public async handleSimpleQuery(query: string, language: string): Promise<{ success: boolean, data?: string, error?: string }> {
+    safeLog(`Handling simple query: "${query}" (Language: ${language})`);
+    const config = configHelper.loadConfig();
+    const mainWindow = this.deps.getMainWindow();
+
+    // Ensure AI client is initialized and API key is valid
+    if (config.apiProvider === "openai" && !this.openaiClient) {
+      this.initializeAIClient();
+      if (!this.openaiClient) {
+        safeError("OpenAI client not initialized for simple query");
+        mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        return { success: false, error: "OpenAI API key not configured or invalid." };
+      }
+    } else if (config.apiProvider === "gemini" && !this.geminiApiKey) {
+      this.initializeAIClient();
+      if (!this.geminiApiKey) {
+        safeError("Gemini API key not initialized for simple query");
+        mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        return { success: false, error: "Gemini API key not configured or invalid." };
+      }
+    } else if (config.apiProvider === "anthropic" && !this.anthropicClient) {
+      this.initializeAIClient();
+      if (!this.anthropicClient) {
+        safeError("Anthropic client not initialized for simple query");
+        mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        return { success: false, error: "Anthropic API key not configured or invalid." };
+      }
+    }
+
+    // Use a generic system prompt
+    const systemPrompt = "You are a helpful AI assistant. Respond clearly and concisely.";
+    // Define the model to use (e.g., using the solutionModel or a dedicated one)
+    const modelName = config.solutionModel; // Re-use solution model for now
+
+    try {
+      let responseText: string | undefined;
+
+      if (config.apiProvider === "openai") {
+        const completion = await this.openaiClient!.chat.completions.create({
+          model: modelName || "gpt-4o",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: query }
+          ],
+          max_tokens: 1500, // Adjust token limit as needed
+          temperature: 0.5, // Adjust temperature for general queries
+        });
+        responseText = completion.choices[0].message.content;
+
+      } else if (config.apiProvider === "gemini") {
+        const geminiMessages: GeminiMessage[] = [
+          { role: "user", parts: [{ text: `${systemPrompt}\n\nUser Query: ${query}` }] }
+        ];
+        const response = await axios.default.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
+          {
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: 0.5,
+              maxOutputTokens: 1500
+            }
+          }
+          // Note: AbortSignal not easily applied here without more refactoring
+        );
+        const responseData = response.data as GeminiResponse;
+        if (!responseData.candidates || responseData.candidates.length === 0) {
+          throw new Error("Empty response from Gemini API");
+        }
+        responseText = responseData.candidates[0].content.parts[0].text;
+
+      } else if (config.apiProvider === "anthropic") {
+        const response = await this.anthropicClient!.messages.create({
+          model: modelName || "claude-3-7-sonnet-20250219",
+          max_tokens: 1500,
+          messages: [
+            { role: "user", content: query }
+          ],
+          system: systemPrompt, // Anthropic uses a dedicated system parameter
+          temperature: 0.5,
+        });
+        responseText = (response.content[0] as { type: 'text', text: string }).text;
+      }
+
+      if (responseText) {
+        safeLog(`Simple query successful. Response length: ${responseText.length}`);
+        return { success: true, data: responseText };
+      } else {
+        throw new Error("No response content received from AI provider.");
+      }
+
+    } catch (error: any) { // Catch block needs to handle potential errors
+      safeError('Error handling simple query:', error);
+      let errorMessage = "An unknown error occurred during the AI query.";
+      if (error.response) { // Axios error structure
+        errorMessage = `API Error (${error.response.status}): ${error.response.data?.error?.message || error.message}`;
+      } else if (error.status) { // OpenAI/Anthropic error structure
+         errorMessage = `API Error (${error.status}): ${error.message}`;
+      } else if (error.message) {
+         errorMessage = error.message;
+      }
+      // Handle specific error codes if needed (e.g., 401, 429)
+      if (error.status === 401 || error?.response?.status === 401) {
+         errorMessage = "Invalid API Key. Please check settings.";
+         mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+      } else if (error.status === 429 || error?.response?.status === 429) {
+         errorMessage = "API Rate Limit Exceeded or insufficient quota. Please try again later.";
+      }
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  // Audio transcription handler using OpenAI Whisper API
+  public async handleAudioTranscription(audioBuffer: ArrayBuffer, mimeType?: string): Promise<{ success: boolean, text?: string, error?: string }> {
+    safeLog(`Processing audio transcription request (MIME type: ${mimeType || 'not provided'})`);
+    
+    // Validate buffer first
+    if (!audioBuffer || audioBuffer.byteLength === 0) {
+      safeError('Received empty audio buffer');
+      return { success: false, error: "Empty audio buffer received. Please try recording again." };
+    }
+    
+    safeLog(`Audio buffer size: ${audioBuffer.byteLength} bytes`);
+    
+    const config = configHelper.loadConfig();
+    const mainWindow = this.deps.getMainWindow();
+
+    try {
+      // Ensure we have the right client initialized
+      if (config.apiProvider === "openai" && !this.openaiClient) {
+        this.initializeAIClient();
+        if (!this.openaiClient) {
+          safeError("OpenAI client not initialized for audio transcription");
+          mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+          return { success: false, error: "OpenAI API key not configured or invalid." };
+        }
+      } else if (config.apiProvider !== "openai") {
+        // Only OpenAI supports Whisper API directly
+        return { 
+          success: false, 
+          error: "Audio transcription currently requires OpenAI API. Please change provider in settings." 
+        };
+      }
+
+      // Convert the ArrayBuffer to Buffer
+      const buffer = Buffer.from(audioBuffer);
+      
+      if (buffer.length === 0) {
+        safeError('Buffer conversion resulted in empty buffer');
+        return { success: false, error: "Audio conversion failed. Please try recording again." };
+      }
+      
+      safeLog(`Converted to Node.js Buffer: ${buffer.length} bytes`);
+      
+      // Create a temporary file for the audio
+      const tempDir = path.join(app.getPath('temp'), 'interview-coder-audio');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      
+      // Determine best file extension based on MIME type
+      let fileExtension = 'mp3'; // Default to mp3
+      
+      if (mimeType) {
+        if (mimeType.includes('webm')) fileExtension = 'webm';
+        else if (mimeType.includes('ogg')) fileExtension = 'ogg';
+        else if (mimeType.includes('wav')) fileExtension = 'wav';
+        else if (mimeType.includes('mp4')) fileExtension = 'mp4';
+        else if (mimeType.includes('mpeg') || mimeType.includes('mp3')) fileExtension = 'mp3';
+      }
+      
+      const tempFilePath = path.join(tempDir, `audio-${Date.now()}.${fileExtension}`);
+      
+      // Log file details for debugging
+      safeLog(`Saving audio to temporary file: ${tempFilePath} (size: ${buffer.length} bytes, format: ${fileExtension})`);
+      
+      // Write the buffer to file
+      try {
+        fs.writeFileSync(tempFilePath, buffer);
+      } catch (writeError) {
+        safeError('Error writing audio file:', writeError);
+        return { success: false, error: "Failed to save audio file. Please try again." };
+      }
+      
+      // Log after writing the file
+      const fileStats = fs.statSync(tempFilePath);
+      safeLog(`Audio file created successfully. Size on disk: ${fileStats.size} bytes`);
+
+      // Check if the file is empty or too small - more lenient threshold
+      if (fileStats.size < 50) { // Reduced threshold from 100 to 50 bytes
+        fs.unlinkSync(tempFilePath); // Clean up
+        throw new Error("Audio file is too small or empty. Please try recording again and speak clearly.");
+      }
+
+      // Use the OpenAI client's direct implementation which handles FormData correctly
+      safeLog(`Sending ${fileExtension} file to OpenAI Whisper API`);
+      
+      try {
+        const transcription = await this.openaiClient.audio.transcriptions.create({
+          file: fs.createReadStream(tempFilePath),
+          model: "whisper-1",
+          language: "en"
+        });
+        
+        // Clean up the temporary file
+        try {
+          fs.unlinkSync(tempFilePath);
+        } catch (cleanupError) {
+          safeError("Error cleaning up temporary audio file:", cleanupError);
+          // Continue processing, this is not critical
+        }
+        
+        if (transcription.text) {
+          safeLog(`Transcription successful. Text length: ${transcription.text.length}`);
+          return { success: true, text: transcription.text };
+        } else {
+          throw new Error("No transcription text received from API.");
+        }
+      } catch (apiError: any) {
+        // More specific logging for API errors
+        safeError('OpenAI Whisper API error:', apiError);
+        
+        // Clean up the temporary file on error
+        try {
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
+        } catch (cleanupError) {
+          safeError("Error cleaning up temporary audio file after API error:", cleanupError);
+        }
+        
+        throw apiError; // Re-throw for general error handling
+      }
+      
+    } catch (error: any) {
+      safeError('Error handling audio transcription:', error);
+      let errorMessage = "Failed to transcribe audio.";
+      
+      if (error.response) { // Axios error structure
+        errorMessage = `API Error (${error.response.status}): ${error.response.data?.error?.message || error.message}`;
+      } else if (error.status) { // OpenAI error structure
+        errorMessage = `API Error (${error.status}): ${error.message}`;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
+        errorMessage = "Invalid API Key. Please check settings.";
+        mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+      } else if (error.status === 429 || (error.response && error.response.status === 429)) {
+        errorMessage = "API Rate Limit Exceeded or insufficient quota. Please try again later.";
+      }
+      
+      return { success: false, error: errorMessage };
     }
   }
 }
