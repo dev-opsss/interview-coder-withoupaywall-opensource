@@ -1,12 +1,18 @@
 // ipcHandlers.ts
 
-import { ipcMain, shell, dialog } from "electron"
+import { ipcMain, shell, dialog, app, clipboard, BrowserWindow } from "electron"
 import { randomBytes } from "crypto"
 import { IIpcHandlerDeps } from "./main"
 import { configHelper } from "./ConfigHelper"
+import fs from "fs"
+import path from "path"
+import { execSync } from "child_process"
+import { sanitizeTexts } from "./sanitizer"
+import { processText } from "./textProcessor"
+import { safeLog, safeError } from "./main"
 
 export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
-  console.log("Initializing IPC handlers")
+  safeLog("Initializing IPC handlers")
 
   // Configuration handlers
   ipcMain.handle("get-config", () => {
@@ -348,4 +354,241 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       return { success: false, error: "Failed to delete last screenshot" }
     }
   })
+
+  // Handle voice input text processing (Existing handler for code tasks)
+  ipcMain.handle("trigger-process-text", async (_event, { text, language }) => {
+    try {
+      // Check for API key first (important!)
+      const config = await configHelper.loadConfig();
+      if (!config?.apiKey) {
+        safeError('API key missing for trigger-process-text');
+        // Optionally notify the renderer
+        deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        return { success: false, error: 'API key is not configured.' };
+      }
+      // Process the text and return the result
+      // Reverted call to original signature
+      return await processText(text); 
+    } catch (error) {
+      safeError('Error in text processing handler:', error);
+      return { success: false, error: 'Failed to process text input' };
+    }
+  });
+
+  // NEW Handler for general AI queries from the text input
+  ipcMain.handle("handle-ai-query", async (_event, { query, language }) => {
+    safeLog(`Handling AI Query: \"${query}\" (Language: ${language})`);
+    try {
+      // Check if processingHelper exists (it's optional in deps)
+      if (!deps.processingHelper) {
+        safeError('ProcessingHelper not available in IPC handler dependencies.');
+        return { success: false, error: 'Internal error: Processing helper not initialized.' };
+      }
+
+      // No need to check API key here, the helper method does it
+      // const config = await configHelper.loadConfig();
+      // const apiKey = config?.apiKey;
+      // if (!apiKey) { ... }
+
+      // Call the new method on the processing helper instance
+      return await deps.processingHelper.handleSimpleQuery(query, language);
+
+      // --- Remove previous commented-out logic and placeholder --- 
+      /*
+      const config = await configHelper.loadConfig();
+      const apiKey = config?.apiKey;
+
+      if (!apiKey) {
+        safeError('API key missing for handle-ai-query');
+        deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        return { success: false, error: 'API key is not configured.' };
+      }
+
+      // --- AI Interaction Logic (COMMENTED OUT) --- 
+      safeLog('Attempting AI call...'); 
+      
+      // Example using Gemini (replace with your actual implementation)
+      // const genAI = new GoogleGenerativeAI(apiKey);
+      // Choose a model appropriate for general queries (e.g., gemini-pro)
+      // This model name might come from config as well
+      // const modelName = config.model || 'gemini-pro'; // Requires adding 'model' to Config type
+      // const model = genAI.getGenerativeModel({ model: modelName });
+      // 
+      // const result = await model.generateContent(query);
+      // const response = await result.response;
+      // const textResponse = response.text();
+
+      // safeLog(`AI Query successful. Response length: ${textResponse?.length}`);
+      // return { success: true, data: textResponse };
+      
+      // --- End AI Interaction Logic --- 
+
+      // Placeholder response until AI logic is implemented and uncommented
+      safeLog("AI Query handler executed (placeholder response).");
+      return { success: true, data: `Placeholder response for query: \"${query}\"` };
+      */
+
+    } catch (error: any) {
+      // The helper method should catch its own errors, but add a fallback
+      safeError('Unexpected error in handle-ai-query handler:', error);
+      const errorMessage = error.message || 'An unknown error occurred processing the AI query.';
+      return { success: false, error: errorMessage };
+    }
+  });
+
+  // Text input dialog
+  ipcMain.handle("show-input-dialog", async () => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow) {
+        return { success: false, error: "Main window not available" };
+      }
+
+      // Generate a unique session ID for this dialog
+      const sessionId = randomBytes(16).toString('hex');
+
+      // Create a promise that will resolve when the user submits the form or cancels
+      return new Promise((resolve) => {
+        // Set up listeners for this specific dialog session
+        const submitListener = (_: Electron.IpcMainEvent, dialogSessionId: string, text: string) => {
+          if (dialogSessionId === sessionId) {
+            cleanup();
+            resolve(text);
+          }
+        };
+
+        const cancelListener = (_: Electron.IpcMainEvent, dialogSessionId: string) => {
+          if (dialogSessionId === sessionId) {
+            cleanup();
+            resolve(null);
+          }
+        };
+
+        // Register temporary event listeners for this dialog session
+        ipcMain.on('dialog-submit', submitListener);
+        ipcMain.on('dialog-cancel', cancelListener);
+
+        // Create a function to handle window closed event
+        const windowClosedHandler = () => {
+          cleanup();
+          resolve(null);
+        };
+
+        // Function to clean up resources
+        const cleanup = () => {
+          // Remove event listeners
+          ipcMain.removeListener('dialog-submit', submitListener);
+          ipcMain.removeListener('dialog-cancel', cancelListener);
+          
+          // Remove window closed event handler if the window still exists
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.removeListener('closed', windowClosedHandler);
+            
+            // Send message to close the overlay if the window and webContents still exist
+            if (!mainWindow.webContents.isDestroyed()) {
+              mainWindow.webContents.send('close-input-overlay');
+            }
+          }
+        };
+
+        // Send message to the renderer process to display the overlay
+        mainWindow.webContents.send('show-input-overlay', sessionId);
+
+        // Cleanup if the window closes
+        mainWindow.once('closed', windowClosedHandler);
+      });
+    } catch (error) {
+      safeError('Error showing input dialog:', error);
+      return null;
+    }
+  });
+
+  // Voice input toggle handler
+  ipcMain.handle('toggle-voice-input', () => {
+    safeLog('Toggle voice input requested from renderer');
+    
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        safeError('Cannot toggle voice input: Main window not available or destroyed');
+        return { success: false, error: 'Main window not available' };
+      }
+      
+      // Forward the toggle request to the renderer
+      mainWindow.webContents.send('toggle-voice-input');
+      safeLog('Sent toggle-voice-input event to renderer');
+      return { success: true };
+    } catch (error) {
+      safeError('Error toggling voice input:', error);
+      return { success: false, error: 'Failed to toggle voice input' };
+    }
+  });
+
+  // Audio transcription handler
+  ipcMain.handle('transcribe-audio', async (_event, audioData) => {
+    safeLog('Received audio for transcription');
+    try {
+      // Check for API key
+      const config = await configHelper.loadConfig();
+      if (!config?.apiKey) {
+        safeError('API key missing for audio transcription');
+        deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        return { success: false, error: 'API key is not configured.' };
+      }
+
+      // Use deps.processingHelper to handle the transcription
+      if (!deps.processingHelper) {
+        safeError('ProcessingHelper not available for audio transcription');
+        return { success: false, error: 'Internal error: Processing helper not initialized.' };
+      }
+
+      // Check if audioData is an object with buffer and mimeType properties
+      const isNewFormat = audioData && typeof audioData === 'object' && 'buffer' in audioData && 'mimeType' in audioData;
+      
+      if (!isNewFormat) {
+        safeLog('Received audio data in legacy format (buffer only)');
+        if (!audioData || (audioData instanceof ArrayBuffer && audioData.byteLength === 0)) {
+          safeError('Empty audio buffer received');
+          return { success: false, error: 'Empty audio data received. Please try again.' };
+        }
+      } else {
+        safeLog(`Received audio data in new format with mime type: ${audioData.mimeType}`);
+        if (!audioData.buffer || (audioData.buffer instanceof ArrayBuffer && audioData.buffer.byteLength === 0)) {
+          safeError('Empty audio buffer received in structured format');
+          return { success: false, error: 'Empty audio data received. Please try again.' };
+        }
+      }
+      
+      let audioBuffer;
+      let mimeType;
+      
+      if (isNewFormat) {
+        audioBuffer = audioData.buffer;
+        mimeType = audioData.mimeType;
+        safeLog(`Audio buffer size: ${audioBuffer.byteLength} bytes, MIME type: ${mimeType}`);
+      } else {
+        // Legacy format - just the buffer
+        audioBuffer = audioData;
+        mimeType = 'audio/mpeg'; // Default
+        safeLog(`Audio buffer size (legacy format): ${audioBuffer.byteLength} bytes, using default MIME type: ${mimeType}`);
+      }
+      
+      // Call the handleAudioTranscription method with both buffer and mime type
+      safeLog(`Calling ProcessingHelper.handleAudioTranscription with ${audioBuffer.byteLength} bytes of data`);
+      const result = await deps.processingHelper.handleAudioTranscription(audioBuffer, mimeType);
+      
+      safeLog(`Transcription result: ${result.success ? 'success' : 'failure'}`);
+      if (!result.success) {
+        safeError(`Transcription error: ${result.error}`);
+      }
+      
+      return result;
+    } catch (error: any) {
+      safeError('Error in audio transcription:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to transcribe audio' 
+      };
+    }
+  });
 }

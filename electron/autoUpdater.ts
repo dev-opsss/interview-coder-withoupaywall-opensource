@@ -2,17 +2,55 @@ import { autoUpdater } from "electron-updater"
 import { BrowserWindow, ipcMain, app } from "electron"
 import log from "electron-log"
 
+// Safe console logging to prevent EPIPE errors
+const safeLog = (...args: any[]) => {
+  try {
+    console.log(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`Error during logging: ${error?.message || String(error)}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
+
+// Safe error logging
+const safeError = (...args: any[]) => {
+  try {
+    console.error(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`ERROR: ${args.map(a => String(a)).join(' ')}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
+
 export function initAutoUpdater() {
-  console.log("Initializing auto-updater...")
+  safeLog("Initializing auto-updater...")
 
   // Skip update checks in development
   if (!app.isPackaged) {
-    console.log("Skipping auto-updater in development mode")
+    safeLog("Skipping auto-updater in development mode")
     return
   }
 
   if (!process.env.GH_TOKEN) {
-    console.error("GH_TOKEN environment variable is not set")
+    safeError("GH_TOKEN environment variable is not set")
     return
   }
 
@@ -25,85 +63,85 @@ export function initAutoUpdater() {
   // Enable more verbose logging
   autoUpdater.logger = log
   log.transports.file.level = "debug"
-  console.log(
+  safeLog(
     "Auto-updater logger configured with level:",
     log.transports.file.level
   )
 
   // Log all update events
   autoUpdater.on("checking-for-update", () => {
-    console.log("Checking for updates...")
+    safeLog("Checking for updates...")
   })
 
   autoUpdater.on("update-available", (info) => {
-    console.log("Update available:", info)
+    safeLog("Update available:", info)
     // Notify renderer process about available update
     BrowserWindow.getAllWindows().forEach((window) => {
-      console.log("Sending update-available to window")
+      safeLog("Sending update-available to window")
       window.webContents.send("update-available", info)
     })
   })
 
   autoUpdater.on("update-not-available", (info) => {
-    console.log("Update not available:", info)
+    safeLog("Update not available:", info)
   })
 
   autoUpdater.on("download-progress", (progressObj) => {
-    console.log("Download progress:", progressObj)
+    safeLog("Download progress:", progressObj)
   })
 
   autoUpdater.on("update-downloaded", (info) => {
-    console.log("Update downloaded:", info)
+    safeLog("Update downloaded:", info)
     // Notify renderer process that update is ready to install
     BrowserWindow.getAllWindows().forEach((window) => {
-      console.log("Sending update-downloaded to window")
+      safeLog("Sending update-downloaded to window")
       window.webContents.send("update-downloaded", info)
     })
   })
 
   autoUpdater.on("error", (err) => {
-    console.error("Auto updater error:", err)
+    safeError("Auto updater error:", err)
   })
 
   // Check for updates immediately
-  console.log("Checking for updates...")
+  safeLog("Checking for updates...")
   autoUpdater
     .checkForUpdates()
     .then((result) => {
-      console.log("Update check result:", result)
+      safeLog("Update check result:", result)
     })
     .catch((err) => {
-      console.error("Error checking for updates:", err)
+      safeError("Error checking for updates:", err)
     })
 
   // Set up update checking interval (every 1 hour)
   setInterval(() => {
-    console.log("Checking for updates (interval)...")
+    safeLog("Checking for updates (interval)...")
     autoUpdater
       .checkForUpdates()
       .then((result) => {
-        console.log("Update check result (interval):", result)
+        safeLog("Update check result (interval):", result)
       })
       .catch((err) => {
-        console.error("Error checking for updates (interval):", err)
+        safeError("Error checking for updates (interval):", err)
       })
   }, 60 * 60 * 1000)
 
   // Handle IPC messages from renderer
   ipcMain.handle("start-update", async () => {
-    console.log("Start update requested")
+    safeLog("Start update requested")
     try {
       await autoUpdater.downloadUpdate()
-      console.log("Update download completed")
+      safeLog("Update download completed")
       return { success: true }
     } catch (error) {
-      console.error("Failed to start update:", error)
+      safeError("Failed to start update:", error)
       return { success: false, error: error.message }
     }
   })
 
   ipcMain.handle("install-update", () => {
-    console.log("Install update requested")
+    safeLog("Install update requested")
     autoUpdater.quitAndInstall()
   })
 }

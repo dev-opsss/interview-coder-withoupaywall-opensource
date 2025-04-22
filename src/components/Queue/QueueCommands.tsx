@@ -11,6 +11,9 @@ interface QueueCommandsProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
+  isMicActive?: boolean
+  onToggleVoice?: () => void
+  onToggleChat?: () => void
 }
 
 const QueueCommands: React.FC<QueueCommandsProps> = ({
@@ -18,7 +21,10 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   screenshotCount = 0,
   credits,
   currentLanguage,
-  setLanguage
+  setLanguage,
+  isMicActive = false,
+  onToggleVoice = () => {},
+  onToggleChat = () => {}
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -194,6 +200,54 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             </div>
           )}
 
+          {/* Separator */}
+          <div className="mx-2 h-4 w-px bg-white/20" />
+
+          {/* Add Voice Button */}
+          <div
+            className={`flex items-center cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors ${
+              isMicActive ? 'text-red-400' : ''
+            }`}
+            onClick={onToggleVoice}
+            title={isMicActive ? "Stop voice input" : "Start voice input"}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-3.5 h-3.5"
+            >
+              <path d="M12 15C13.66 15 15 13.66 15 12V6C15 4.34 13.66 3 12 3C10.34 3 9 4.34 9 6V12C9 13.66 10.34 15 12 15Z" />
+              <path d="M17 12C17 14.76 14.76 17 12 17C9.24 17 7 14.76 7 12H5C5 15.53 7.61 18.43 11 18.92V22H13V18.92C16.39 18.43 19 15.53 19 12H17Z" />
+            </svg>
+            <span className="text-[11px] leading-none ml-1.5">Voice</span>
+          </div>
+          
+          {/* Add AI Chat Button */}
+          <div
+            className="flex items-center cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors"
+            onClick={onToggleChat}
+            title="Open AI chat assistant"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-3.5 h-3.5 text-indigo-400"
+            >
+              <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
+            </svg>
+            <span className="text-[11px] leading-none ml-1.5">AI Chat</span>
+          </div>
+          
           {/* Separator */}
           <div className="mx-2 h-4 w-px bg-white/20" />
 
@@ -459,7 +513,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                       {/* API Key Settings */}
                       <div className="mb-3 px-2 space-y-1">
                         <div className="flex items-center justify-between text-[13px] font-medium text-white/90">
-                          <span>OpenAI API Settings</span>
+                          <span>API Settings</span>
                           <button
                             className="bg-white/10 hover:bg-white/20 px-2 py-1 rounded text-[11px]"
                             onClick={() => window.electronAPI.openSettingsPortal()}

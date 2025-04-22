@@ -1,4 +1,43 @@
-import { app, BrowserWindow, screen, shell, ipcMain } from "electron"
+// IMPORTANT: This must be the very first code executed
+// Patch process.stdout and process.stderr write methods to prevent EPIPE errors
+const originalStdoutWrite = process.stdout.write;
+const originalStderrWrite = process.stderr.write;
+
+// Safely wrap write to handle EPIPE errors
+process.stdout.write = function(
+  chunk: string | Uint8Array, 
+  encodingOrCallback?: string | Function,
+  callback?: Function
+): boolean {
+  try {
+    return originalStdoutWrite.apply(process.stdout, arguments as any);
+  } catch (err: any) {
+    if (err && err.code === 'EPIPE') {
+      // Silently ignore EPIPE errors
+      return true;
+    }
+    throw err;
+  }
+} as typeof process.stdout.write;
+
+process.stderr.write = function(
+  chunk: string | Uint8Array, 
+  encodingOrCallback?: string | Function,
+  callback?: Function
+): boolean {
+  try {
+    return originalStderrWrite.apply(process.stderr, arguments as any);
+  } catch (err: any) {
+    if (err && err.code === 'EPIPE') {
+      // Silently ignore EPIPE errors
+      return true;
+    }
+    throw err;
+  }
+} as typeof process.stderr.write;
+
+// Now import everything else
+import { app, BrowserWindow, screen, shell, ipcMain, dialog, session } from "electron"
 import path from "path"
 import fs from "fs"
 import { initializeIpcHandlers } from "./ipcHandlers"
@@ -9,8 +48,154 @@ import { initAutoUpdater } from "./autoUpdater"
 import { configHelper } from "./ConfigHelper"
 import * as dotenv from "dotenv"
 
+// Global uncaughtException handler for EPIPE errors
+process.on('uncaughtException', (error: NodeJS.ErrnoException) => {
+  // If it's an EPIPE error, just suppress it
+  if (error && typeof error === 'object' && error.code === 'EPIPE') {
+    // Suppress EPIPE errors completely - they should never crash the app
+    return;
+  }
+  
+  // Also handle other non-fatal errors that should be suppressed
+  const suppressibleErrors = [
+    'ECONNRESET',  // Connection reset by peer
+    'ECONNABORTED', // Connection aborted
+    'ENOTCONN',    // Socket is not connected
+    'ESHUTDOWN',   // Cannot send after socket shutdown
+    'EPIPE',       // Broken pipe
+    'EIO'          // I/O error
+  ];
+  
+  if (error && typeof error === 'object' && error.code && suppressibleErrors.includes(error.code)) {
+    // These network/IO errors should not crash the app
+    try {
+      process.stderr.write(`[Global handler] Suppressed non-fatal error: ${error.code}\n`);
+    } catch (_) {
+      // Silent if stderr fails
+    }
+    return;
+  }
+  
+  // For all other errors, log them safely and rethrow
+  try {
+    const errorInfo = {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      code: error.code
+    };
+    process.stderr.write(`Uncaught exception: ${JSON.stringify(errorInfo, null, 2)}\n`);
+  } catch (_) {
+    // If we can't even log the error, we're in trouble but still continue
+  }
+  
+  // Gracefully crash the app to prevent weird/undefined states
+  if (app && typeof app.exit === 'function') {
+    // Try to exit gracefully with non-zero code
+    app.exit(1);
+  } else {
+    // If we can't access app, use process.exit as fallback
+    process.exit(1);
+  }
+});
+
+// Global console override to prevent EPIPE errors
+const originalConsole = {
+  log: console.log,
+  error: console.error,
+  warn: console.warn,
+  info: console.info,
+  debug: console.debug,
+  trace: console.trace
+};
+
+// Simpler versions that don't need to catch EPIPE since our streams handle that
+console.log = function(...args) {
+  try {
+    originalConsole.log.apply(console, args);
+  } catch (err) {
+    // Already using safe streams, but add extra protection
+    try {
+      process.stdout.write(args.map(a => String(a)).join(' ') + '\n');
+    } catch (e) {
+      // Silent failure
+    }
+  }
+};
+
+console.error = function(...args) {
+  try {
+    originalConsole.error.apply(console, args);
+  } catch (err) {
+    try {
+      process.stderr.write(args.map(a => String(a)).join(' ') + '\n');
+    } catch (e) {
+      // Silent failure
+    }
+  }
+};
+
+console.warn = function(...args) {
+  try {
+    originalConsole.warn.apply(console, args);
+  } catch (err) {
+    try {
+      process.stderr.write('[WARN] ' + args.map(a => String(a)).join(' ') + '\n');
+    } catch (e) {
+      // Silent failure
+    }
+  }
+};
+
+// Add overrides for other console methods
+console.info = function(...args) {
+  try {
+    originalConsole.info.apply(console, args);
+  } catch (err) {
+    try {
+      process.stdout.write('[INFO] ' + args.map(a => String(a)).join(' ') + '\n');
+    } catch (e) {
+      // Silent failure
+    }
+  }
+};
+
+console.debug = function(...args) {
+  try {
+    originalConsole.debug.apply(console, args);
+  } catch (err) {
+    try {
+      process.stdout.write('[DEBUG] ' + args.map(a => String(a)).join(' ') + '\n');
+    } catch (e) {
+      // Silent failure
+    }
+  }
+};
+
+console.trace = function(...args) {
+  try {
+    originalConsole.trace.apply(console, args);
+  } catch (err) {
+    try {
+      process.stderr.write('[TRACE] ' + args.map(a => String(a)).join(' ') + '\n');
+    } catch (e) {
+      // Silent failure
+    }
+  }
+};
+
 // Constants
 const isDev = process.env.NODE_ENV === "development"
+
+// Safe console logging to prevent EPIPE errors - keep for compatibility with existing code
+export const safeLog = (...args: any[]) => {
+  console.log(...args);
+};
+
+// Safe error logging - keep for compatibility with existing code
+export const safeError = (...args: any[]) => {
+  console.error(...args);
+};
 
 // Application State
 const state = {
@@ -85,6 +270,7 @@ export interface IShortcutsHelperDeps {
   moveWindowRight: () => void
   moveWindowUp: () => void
   moveWindowDown: () => void
+  toggleVoiceInput: () => void
 }
 
 export interface IIpcHandlerDeps {
@@ -150,7 +336,8 @@ function initializeHelpers() {
         )
       ),
     moveWindowUp: () => moveWindowVertical((y) => y - state.step),
-    moveWindowDown: () => moveWindowVertical((y) => y + state.step)
+    moveWindowDown: () => moveWindowVertical((y) => y + state.step),
+    toggleVoiceInput
   } as IShortcutsHelperDeps)
 }
 
@@ -206,6 +393,24 @@ async function createWindow(): Promise<void> {
   state.step = 60
   state.currentY = 50
 
+  // Configure session for cross-origin isolation before window creation
+  const ses = session.defaultSession;
+  
+  // Set COOP and COEP headers for cross-origin isolation
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Cross-Origin-Opener-Policy': ['same-origin'],
+        'Cross-Origin-Embedder-Policy': ['credentialless'],
+        'Cross-Origin-Resource-Policy': ['cross-origin']
+      }
+    });
+  });
+
+  // Add log for debugging
+  safeLog("Configured session with COOP and COEP:credentialless headers for cross-origin isolation");
+
   const windowSettings: Electron.BrowserWindowConstructorOptions = {
     width: 800,
     height: 600,
@@ -220,7 +425,8 @@ async function createWindow(): Promise<void> {
       preload: isDev
         ? path.join(__dirname, "../dist-electron/preload.js")
         : path.join(__dirname, "preload.js"),
-      scrollBounce: true
+      scrollBounce: true,
+      webSecurity: !isDev,
     },
     show: true,
     frame: false,
@@ -240,20 +446,35 @@ async function createWindow(): Promise<void> {
 
   state.mainWindow = new BrowserWindow(windowSettings)
 
+  // Additional configuration to allow SharedArrayBuffer
+  state.mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+    // Allow all permissions needed for audio capture and SharedArrayBuffer
+    callback(true);
+  });
+
+  // Load extensions in development mode to help debug
+  if (isDev) {
+    try {
+      state.mainWindow.webContents.session.setPermissionCheckHandler(() => true);
+    } catch (e) {
+      safeError("Error configuring permission check handler:", e);
+    }
+  }
+
   // Add more detailed logging for window events
   state.mainWindow.webContents.on("did-finish-load", () => {
-    console.log("Window finished loading")
+    safeLog("Window finished loading")
   })
   state.mainWindow.webContents.on(
     "did-fail-load",
     async (event, errorCode, errorDescription) => {
-      console.error("Window failed to load:", errorCode, errorDescription)
+      safeError("Window failed to load:", errorCode, errorDescription)
       if (isDev) {
         // In development, retry loading after a short delay
-        console.log("Retrying to load development server...")
+        safeLog("Retrying to load development server...")
         setTimeout(() => {
           state.mainWindow?.loadURL("http://localhost:54321").catch((error) => {
-            console.error("Failed to load dev server on retry:", error)
+            safeError("Failed to load dev server on retry:", error)
           })
         }, 1000)
       }
@@ -262,27 +483,27 @@ async function createWindow(): Promise<void> {
 
   if (isDev) {
     // In development, load from the dev server
-    console.log("Loading from development server: http://localhost:54321")
+    safeLog("Loading from development server: http://localhost:54321")
     state.mainWindow.loadURL("http://localhost:54321").catch((error) => {
-      console.error("Failed to load dev server, falling back to local file:", error)
+      safeError("Failed to load dev server, falling back to local file:", error)
       // Fallback to local file if dev server is not available
       const indexPath = path.join(__dirname, "../dist/index.html")
-      console.log("Falling back to:", indexPath)
+      safeLog("Falling back to:", indexPath)
       if (fs.existsSync(indexPath)) {
         state.mainWindow.loadFile(indexPath)
       } else {
-        console.error("Could not find index.html in dist folder")
+        safeError("Could not find index.html in dist folder")
       }
     })
   } else {
     // In production, load from the built files
     const indexPath = path.join(__dirname, "../dist/index.html")
-    console.log("Loading production build:", indexPath)
+    safeLog("Loading production build:", indexPath)
     
     if (fs.existsSync(indexPath)) {
       state.mainWindow.loadFile(indexPath)
     } else {
-      console.error("Could not find index.html in dist folder")
+      safeError("Could not find index.html in dist folder")
     }
   }
 
@@ -292,7 +513,7 @@ async function createWindow(): Promise<void> {
     state.mainWindow.webContents.openDevTools()
   }
   state.mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    console.log("Attempting to open URL:", url)
+    safeLog("Attempting to open URL:", url)
     try {
       const parsedURL = new URL(url);
       const hostname = parsedURL.hostname;
@@ -302,7 +523,7 @@ async function createWindow(): Promise<void> {
         return { action: "deny" }; // Do not open this URL in a new Electron window
       }
     } catch (error) {
-      console.error("Invalid URL %d in setWindowOpenHandler: %d" , url , error);
+      safeError("Invalid URL %d in setWindowOpenHandler: %d" , url , error);
       return { action: "deny" }; // Deny access as URL string is malformed or invalid
     }
     return { action: "allow" };
@@ -350,17 +571,17 @@ async function createWindow(): Promise<void> {
   // Set opacity based on user preferences or hide initially
   // Ensure the window is visible for the first launch or if opacity > 0.1
   const savedOpacity = configHelper.getOpacity();
-  console.log(`Initial opacity from config: ${savedOpacity}`);
+  safeLog(`Initial opacity from config: ${savedOpacity}`);
   
   // Always make sure window is shown first
   state.mainWindow.showInactive(); // Use showInactive for consistency
   
   if (savedOpacity <= 0.1) {
-    console.log('Initial opacity too low, setting to 0 and hiding window');
+    safeLog('Initial opacity too low, setting to 0 and hiding window');
     state.mainWindow.setOpacity(0);
     state.isWindowVisible = false;
   } else {
-    console.log(`Setting initial opacity to ${savedOpacity}`);
+    safeLog(`Setting initial opacity to ${savedOpacity}`);
     state.mainWindow.setOpacity(savedOpacity);
     state.isWindowVisible = true;
   }
@@ -396,7 +617,7 @@ function hideMainWindow(): void {
     state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
     state.mainWindow.setOpacity(0);
     state.isWindowVisible = false;
-    console.log('Window hidden, opacity set to 0');
+    safeLog('Window hidden, opacity set to 0');
   }
 }
 
@@ -418,12 +639,12 @@ function showMainWindow(): void {
     state.mainWindow.showInactive(); // Use showInactive instead of show+focus
     state.mainWindow.setOpacity(1); // Then set opacity to 1 after showing
     state.isWindowVisible = true;
-    console.log('Window shown with showInactive(), opacity set to 1');
+    safeLog('Window shown with showInactive(), opacity set to 1');
   }
 }
 
 function toggleMainWindow(): void {
-  console.log(`Toggling window. Current state: ${state.isWindowVisible ? 'visible' : 'hidden'}`);
+  safeLog(`Toggling window. Current state: ${state.isWindowVisible ? 'visible' : 'hidden'}`);
   if (state.isWindowVisible) {
     hideMainWindow();
   } else {
@@ -451,7 +672,7 @@ function moveWindowVertical(updateFn: (y: number) => number): void {
     state.screenHeight + ((state.windowSize?.height || 0) * 2) / 3
 
   // Log the current state and limits
-  console.log({
+  safeLog({
     newY,
     maxUpLimit,
     maxDownLimit,
@@ -490,17 +711,176 @@ function setWindowDimensions(width: number, height: number): void {
 // Environment setup
 function loadEnvVariables() {
   if (isDev) {
-    console.log("Loading env variables from:", path.join(process.cwd(), ".env"))
+    safeLog("Loading env variables from:", path.join(process.cwd(), ".env"))
     dotenv.config({ path: path.join(process.cwd(), ".env") })
   } else {
-    console.log(
+    safeLog(
       "Loading env variables from:",
       path.join(process.resourcesPath, ".env")
     )
     dotenv.config({ path: path.join(process.resourcesPath, ".env") })
   }
-  console.log("Environment variables loaded for open-source version")
+  safeLog("Environment variables loaded for open-source version")
 }
+
+// --- Placeholder for Audio Capture State ---
+let isCapturingAudio = false;
+let stopCaptureFunction: (() => Promise<void>) | null = null; // Function to stop platform capture
+
+// --- Platform-Specific Audio Capture Functions ---
+
+async function startMacAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
+  safeLog('Attempting to start macOS audio capture...');
+  
+  // Removed check for 'screen' permission as it's not the correct API call
+  // and actual permission depends on the native capture method used.
+  // The native module integration itself should handle errors due to permissions.
+
+  // --- Integration Point for macOS native module --- 
+  // TODO: Replace placeholder with actual native module integration
+  safeLog("macOS native audio capture not implemented yet.");
+  const intervalId = setInterval(() => {
+      if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
+          clearInterval(intervalId);
+          isCapturingAudio = false; 
+          stopCaptureFunction = null;
+          return;
+      }
+      const dummyChunk = new Float32Array(1024).fill(Math.random() * 0.2 - 0.1);
+      if (webContents && !webContents.isDestroyed()) {
+          // Ensure conversion to ArrayBuffer before sending if needed (dummy already is)
+          webContents.send('audio-data-chunk', dummyChunk.buffer);
+      }
+  }, 250); 
+
+  const stopFnPlaceholder = async () => {
+      safeLog('Stopping macOS placeholder audio capture...');
+      clearInterval(intervalId);
+      stopCaptureFunction = null;
+  };
+  return stopFnPlaceholder;
+}
+
+async function startWindowsAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
+   safeLog('Attempting to start Windows audio capture...');
+   // --- Integration Point for Windows native module/method --- 
+   // TODO: Replace placeholder
+   safeLog("Windows native audio capture not implemented yet.");
+    const intervalId = setInterval(() => {
+        if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
+            clearInterval(intervalId);
+            isCapturingAudio = false;
+            stopCaptureFunction = null;
+            return;
+        }
+        const dummyChunk = new Float32Array(1024).fill(Math.random() * 0.2 - 0.1); 
+        if (webContents && !webContents.isDestroyed()) {
+            webContents.send('audio-data-chunk', dummyChunk.buffer);
+        }
+    }, 250); 
+    const stopFnPlaceholder = async () => { 
+        safeLog('Stopping Windows placeholder audio capture...');
+        clearInterval(intervalId); 
+        stopCaptureFunction = null;
+    }; 
+    // stopCaptureFunction = stopFnPlaceholder;
+    return stopFnPlaceholder;
+}
+
+async function startLinuxAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
+    safeLog('Attempting to start Linux audio capture...');
+    // --- Integration Point for Linux ALSA/PulseAudio loopback --- 
+    // TODO: Replace placeholder
+    safeLog("Linux native audio capture not implemented yet.");
+    const intervalId = setInterval(() => { 
+        if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
+            clearInterval(intervalId);
+            isCapturingAudio = false;
+            stopCaptureFunction = null;
+            return;
+        }
+        const dummyChunk = new Float32Array(1024).fill(Math.random() * 0.2 - 0.1); 
+         if (webContents && !webContents.isDestroyed()) {
+             webContents.send('audio-data-chunk', dummyChunk.buffer);
+         }
+    }, 250); 
+    const stopFnPlaceholder = async () => { 
+        safeLog('Stopping Linux placeholder audio capture...');
+        clearInterval(intervalId); 
+        stopCaptureFunction = null;
+    }; 
+    // stopCaptureFunction = stopFnPlaceholder;
+    return stopFnPlaceholder;
+}
+
+
+// --- Updated IPC Handlers for Audio ---
+ipcMain.handle('start-audio-capture', async (event) => {
+  if (isCapturingAudio) {
+    safeLog('Audio capture already in progress.');
+    return { success: true, message: 'Already capturing' };
+  }
+  safeLog('IPC: Received start-audio-capture request.');
+
+  const mainWindow = getMainWindow(); // Use your existing function to get the window
+  if (!mainWindow || mainWindow.isDestroyed()) {
+      safeError('Cannot start audio capture: Main window not available.');
+      return { success: false, error: 'Main window not available' };
+  }
+
+  try {
+    isCapturingAudio = true; // Set flag early
+    let platformStopFunction: () => Promise<void>;
+
+    switch (process.platform) {
+        case 'darwin': // macOS
+            platformStopFunction = await startMacAudioCapture(mainWindow.webContents);
+            break;
+        case 'win32': // Windows
+            platformStopFunction = await startWindowsAudioCapture(mainWindow.webContents);
+            break;
+        case 'linux': // Linux
+            platformStopFunction = await startLinuxAudioCapture(mainWindow.webContents);
+            break;
+        default:
+            throw new Error(`Unsupported platform for audio capture: ${process.platform}`);
+    }
+    stopCaptureFunction = platformStopFunction; // Store the specific stop function
+    safeLog(`Audio capture started successfully for ${process.platform}.`);
+    return { success: true, message: `Capture started for ${process.platform}` };
+
+  } catch (error: any) {
+      safeError('Failed to start audio capture:', error);
+      isCapturingAudio = false; // Reset flag on error
+      stopCaptureFunction = null;
+      return { success: false, error: error.message || 'Unknown error starting audio capture' };
+  }
+});
+
+ipcMain.handle('stop-audio-capture', async (event) => {
+  if (!isCapturingAudio) {
+    safeLog('Audio capture is not in progress.');
+    return { success: true, message: 'Was not capturing' };
+  }
+  safeLog('IPC: Received stop-audio-capture request.');
+
+  if (stopCaptureFunction) {
+      try {
+          await stopCaptureFunction(); // Call the stored platform-specific stop function
+          safeLog('Platform audio capture stopped successfully.');
+      } catch (error: any) {
+          safeError('Error stopping platform audio capture:', error);
+          // Continue cleanup even if platform stop failed
+      }
+  } else {
+      safeLog('No active stop function found, cleaning up flags only.');
+  }
+
+  isCapturingAudio = false; // Ensure flag is reset
+  stopCaptureFunction = null; // Clear stored function
+
+  return { success: true, message: 'Capture stop request processed.' };
+});
 
 // Initialize application
 async function initializeApp() {
@@ -527,7 +907,7 @@ async function initializeApp() {
     
     // Ensure a configuration file exists
     if (!configHelper.hasApiKey()) {
-      console.log("No API key found in configuration. User will need to set up.")
+      safeLog("No API key found in configuration. User will need to set up.")
     }
     
     initializeHelpers()
@@ -564,26 +944,26 @@ async function initializeApp() {
 
     // Initialize auto-updater regardless of environment
     initAutoUpdater()
-    console.log(
+    safeLog(
       "Auto-updater initialized in",
       isDev ? "development" : "production",
       "mode"
     )
   } catch (error) {
-    console.error("Failed to initialize application:", error)
+    safeError("Failed to initialize application:", error)
     app.quit()
   }
 }
 
-// Auth callback handling removed - no longer needed
+// App event handlers
 app.on("open-url", (event, url) => {
-  console.log("open-url event received:", url)
+  safeLog("open-url event received:", url)
   event.preventDefault()
 })
 
 // Handle second instance (removed auth callback handling)
 app.on("second-instance", (event, commandLine) => {
-  console.log("second-instance event received:", commandLine)
+  safeLog("second-instance event received:", commandLine)
   
   // Focus or create the main window
   if (!state.mainWindow) {
@@ -685,6 +1065,15 @@ function getHasDebugged(): boolean {
   return state.hasDebugged
 }
 
+// Add this function
+function toggleVoiceInput(): void {
+  const mainWindow = getMainWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    safeLog("Toggling voice input in renderer...");
+    mainWindow.webContents.send("toggle-voice-input");
+  }
+}
+
 // Export state and functions for other modules
 export {
   state,
@@ -708,7 +1097,8 @@ export {
   getImagePreview,
   deleteScreenshot,
   setHasDebugged,
-  getHasDebugged
+  getHasDebugged,
+  toggleVoiceInput
 }
 
 app.whenReady().then(initializeApp)

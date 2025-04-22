@@ -4,6 +4,7 @@ import path from "node:path"
 import { app } from "electron"
 import { EventEmitter } from "events"
 import { OpenAI } from "openai"
+import axios from "axios"
 
 interface Config {
   apiKey: string;
@@ -14,6 +15,44 @@ interface Config {
   language: string;
   opacity: number;
 }
+
+// Safe console logging to prevent EPIPE errors
+const safeLog = (...args: any[]) => {
+  try {
+    console.log(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`Error during logging: ${error?.message || String(error)}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
+
+// Safe error logging
+const safeError = (...args: any[]) => {
+  try {
+    console.error(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`ERROR: ${args.map(a => String(a)).join(' ')}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
 
 export class ConfigHelper extends EventEmitter {
   private configPath: string;
@@ -32,9 +71,9 @@ export class ConfigHelper extends EventEmitter {
     // Use the app's user data directory to store the config
     try {
       this.configPath = path.join(app.getPath('userData'), 'config.json');
-      console.log('Config path:', this.configPath);
+      safeLog('Config path:', this.configPath);
     } catch (err) {
-      console.warn('Could not access user data path, using fallback');
+      safeLog('Could not access user data path, using fallback');
       this.configPath = path.join(process.cwd(), 'config.json');
     }
     
@@ -51,7 +90,7 @@ export class ConfigHelper extends EventEmitter {
         this.saveConfig(this.defaultConfig);
       }
     } catch (err) {
-      console.error("Error ensuring config exists:", err);
+      safeError("Error ensuring config exists:", err);
     }
   }
 
@@ -63,7 +102,7 @@ export class ConfigHelper extends EventEmitter {
       // Only allow gpt-4o and gpt-4o-mini for OpenAI
       const allowedModels = ['gpt-4o', 'gpt-4o-mini'];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid OpenAI model specified: ${model}. Using default model: gpt-4o`);
+        safeLog(`Invalid OpenAI model specified: ${model}. Using default model: gpt-4o`);
         return 'gpt-4o';
       }
       return model;
@@ -71,7 +110,7 @@ export class ConfigHelper extends EventEmitter {
       // Only allow gemini-1.5-pro and gemini-2.0-flash for Gemini
       const allowedModels = ['gemini-1.5-pro', 'gemini-2.0-flash'];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.0-flash`);
+        safeLog(`Invalid Gemini model specified: ${model}. Using default model: gemini-2.0-flash`);
         return 'gemini-2.0-flash'; // Changed default to flash
       }
       return model;
@@ -79,7 +118,7 @@ export class ConfigHelper extends EventEmitter {
       // Only allow Claude models
       const allowedModels = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'];
       if (!allowedModels.includes(model)) {
-        console.warn(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-7-sonnet-20250219`);
+        safeLog(`Invalid Anthropic model specified: ${model}. Using default model: claude-3-7-sonnet-20250219`);
         return 'claude-3-7-sonnet-20250219';
       }
       return model;
@@ -120,7 +159,7 @@ export class ConfigHelper extends EventEmitter {
       this.saveConfig(this.defaultConfig);
       return this.defaultConfig;
     } catch (err) {
-      console.error("Error loading config:", err);
+      safeError("Error loading config:", err);
       return this.defaultConfig;
     }
   }
@@ -138,7 +177,7 @@ export class ConfigHelper extends EventEmitter {
       // Write the config file
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
     } catch (err) {
-      console.error("Error saving config:", err);
+      safeError("Error saving config:", err);
     }
   }
 
@@ -155,13 +194,13 @@ export class ConfigHelper extends EventEmitter {
         // If API key starts with "sk-", it's likely an OpenAI key
         if (updates.apiKey.trim().startsWith('sk-')) {
           provider = "openai";
-          console.log("Auto-detected OpenAI API key format");
+          safeLog("Auto-detected OpenAI API key format");
         } else if (updates.apiKey.trim().startsWith('sk-ant-')) {
           provider = "anthropic";
-          console.log("Auto-detected Anthropic API key format");
+          safeLog("Auto-detected Anthropic API key format");
         } else {
           provider = "gemini";
-          console.log("Using Gemini API key format (default)");
+          safeLog("Using Gemini API key format (default)");
         }
         
         // Update the provider in the updates object
@@ -209,7 +248,7 @@ export class ConfigHelper extends EventEmitter {
       
       return newConfig;
     } catch (error) {
-      console.error('Error updating config:', error);
+      safeError('Error updating config:', error);
       return this.defaultConfig;
     }
   }
@@ -294,14 +333,14 @@ export class ConfigHelper extends EventEmitter {
       if (apiKey.trim().startsWith('sk-')) {
         if (apiKey.trim().startsWith('sk-ant-')) {
           provider = "anthropic";
-          console.log("Auto-detected Anthropic API key format for testing");
+          safeLog("Auto-detected Anthropic API key format for testing");
         } else {
           provider = "openai";
-          console.log("Auto-detected OpenAI API key format for testing");
+          safeLog("Auto-detected OpenAI API key format for testing");
         }
       } else {
         provider = "gemini";
-        console.log("Using Gemini API key format for testing (default)");
+        safeLog("Using Gemini API key format for testing (default)");
       }
     }
     
@@ -326,7 +365,7 @@ export class ConfigHelper extends EventEmitter {
       await openai.models.list();
       return { valid: true };
     } catch (error: any) {
-      console.error('OpenAI API key test failed:', error);
+      safeError('OpenAI API key test failed:', error);
       
       // Determine the specific error type for better error messages
       let errorMessage = 'Unknown error validating OpenAI API key';
@@ -359,7 +398,7 @@ export class ConfigHelper extends EventEmitter {
       }
       return { valid: false, error: 'Invalid Gemini API key format.' };
     } catch (error: any) {
-      console.error('Gemini API key test failed:', error);
+      safeError('Gemini API key test failed:', error);
       let errorMessage = 'Unknown error validating Gemini API key';
       
       if (error.message) {
@@ -384,7 +423,7 @@ export class ConfigHelper extends EventEmitter {
       }
       return { valid: false, error: 'Invalid Anthropic API key format.' };
     } catch (error: any) {
-      console.error('Anthropic API key test failed:', error);
+      safeError('Anthropic API key test failed:', error);
       let errorMessage = 'Unknown error validating Anthropic API key';
       
       if (error.message) {

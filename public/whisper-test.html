@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper WASM Test (Transformers.js)</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        #log {
+            width: 100%;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 10px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            background-color: #f5f5f5;
+        }
+        .error { color: red; }
+        .success { color: green; }
+        .info { color: blue; }
+        .status { font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Whisper WASM Test (Transformers.js)</h1>
+    <p>Uses Transformers.js to run Whisper locally. Model download may take time on first run.</p>
+    <p><strong>Note:</strong> For best performance, especially with larger models, specific <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer#security_requirements" target="_blank">COOP/COEP headers</a> are needed on the server.</p>
+
+    <div class="status" id="status">Status: Idle</div>
+
+    <div>
+        <button id="load-pipeline-btn">Load Pipeline (whisper-tiny.en)</button>
+        <button id="start-mic-btn" disabled>Start Microphone</button>
+        <button id="stop-mic-btn" disabled>Stop Microphone</button>
+        <!-- Cleanup might not be strictly necessary for pipeline, but good for AudioContext -->
+        <button id="cleanup-btn" disabled>Cleanup Audio</button> 
+    </div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+    
+    <h2>Transcription</h2>
+    <div id="transcription" style="border: 1px solid #eee; padding: 10px; min-height: 50px; background: #fafafa;"></div>
+
+    <!-- Load Transformers.js library - Removed CDN script tag -->
+    <!-- <script src='https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1' defer></script> -->
+    
+    <script type="module"> // Use type="module" for dynamic import and top-level await
+        // Define pipeline variable in the outer scope
+        let pipeline;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log('DOMContentLoaded fired.');
+
+            const logEl = document.getElementById('log');
+            const statusEl = document.getElementById('status');
+            const transcriptionEl = document.getElementById('transcription');
+            const loadPipelineBtn = document.getElementById('load-pipeline-btn');
+            const startMicBtn = document.getElementById('start-mic-btn');
+            const stopMicBtn = document.getElementById('stop-mic-btn');
+            const cleanupBtn = document.getElementById('cleanup-btn');
+
+            let recognizerPipeline = null; // Holds the loaded Whisper pipeline
+            let audioContext = null;      
+            let micSource = null;         
+            let audioProcessorNode = null;    
+            let isMicActive = false;      
+            const processorPath = './audio-processor.js'; 
+            const modelName = 'Xenova/whisper-tiny.en'; 
+            const targetSampleRate = 16000; 
+
+            // --- Log function (same as before) ---
+            function log(message, type = 'info') {
+                const timestamp = new Date().toLocaleTimeString();
+                const entry = document.createElement('div');
+                entry.className = type;
+                entry.textContent = `[${timestamp}] ${message}`;
+                logEl.appendChild(entry);
+                logEl.scrollTop = logEl.scrollHeight;
+                console[type === 'error' ? 'error' : 'log'](message); 
+            }
+
+            function updateStatus(message) {
+                statusEl.textContent = `Status: ${message}`;
+                log(message, 'info');
+            }
+            
+            // --- Dynamically Load Transformers.js and Check --- 
+            async function initializeLibrary() {
+                updateStatus('Loading Transformers.js library...');
+                try {
+                    // Use dynamic import to load the library from CDN
+                    const transformers = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1');
+                    // Assign the pipeline function from the imported module
+                    pipeline = transformers.pipeline;
+
+                    if (typeof pipeline === 'function') {
+                        log('Transformers.js library loaded and pipeline function is available.', 'success');
+                        loadPipelineBtn.disabled = false; // Enable the button
+                        updateStatus('Library ready. Load pipeline.');
+                    } else {
+                         log('Library loaded, but pipeline function not found in the module.', 'error');
+                         console.error('Imported module structure:', transformers);
+                         updateStatus('Error: Invalid library structure.');
+                    }
+                } catch (error) {
+                    log(`Error loading Transformers.js library: ${error}`, 'error');
+                    console.error(error);
+                    updateStatus('Error: Library load failed.');
+                }
+            }
+
+            // --- Pipeline Loading Event Listener Setup ---
+            loadPipelineBtn.addEventListener('click', async () => {
+                 if (typeof pipeline !== 'function') {
+                     log('Error: Pipeline function is not available. Library might not have loaded.', 'error');
+                     updateStatus('Error: Library function missing.');
+                     return;
+                 }
+                 
+                loadPipelineBtn.disabled = true;
+                startMicBtn.disabled = true; 
+                cleanupBtn.disabled = true; 
+                updateStatus(`Loading pipeline: ${modelName}... (This may take a while & download model files)`);
+                
+                try {
+                    // Use the dynamically imported pipeline function
+                    recognizerPipeline = await pipeline('automatic-speech-recognition', modelName, {
+                         progress_callback: (progress) => {
+                            if (progress.status === 'progress'){
+                                updateStatus(`Loading model file: ${progress.file} (${(progress.progress || 0).toFixed(1)}%)`);
+                            } else if (progress.status === 'ready'){
+                                updateStatus('Pipeline object ready. Model download/init may continue...');
+                            } else if (progress.status === 'done') {
+                                updateStatus('Pipeline fully loaded and ready!');
+                            } else {
+                                updateStatus(`Pipeline status: ${progress.status}...`);
+                            }
+                         },
+                     });
+                    
+                    if (!recognizerPipeline) { 
+                         throw new Error("Pipeline creation returned null or undefined.");
+                    }
+
+                    log(`Pipeline ${modelName} loaded successfully.`, 'success');
+                    updateStatus('Pipeline ready. Start microphone.');
+                    startMicBtn.disabled = false;
+                    cleanupBtn.disabled = false;
+
+                } catch (error) {
+                    log(`Error loading pipeline: ${error}`, 'error');
+                    console.error(error); 
+                    updateStatus('Error loading pipeline.');
+                    loadPipelineBtn.disabled = false; 
+                    startMicBtn.disabled = true;
+                    cleanupBtn.disabled = true;
+                    recognizerPipeline = null;
+                }
+            });
+
+            // --- Microphone and Audio Processing (No changes needed here) ---
+            startMicBtn.addEventListener('click', async () => {
+                if (isMicActive) return;
+                if (!recognizerPipeline) {
+                    log('Pipeline not loaded yet.', 'error');
+                    return;
+                }
+
+                startMicBtn.disabled = true;
+                updateStatus('Starting microphone...');
+                transcriptionEl.textContent = ''; 
+
+                try {
+                    // 1. Initialize AudioContext and Worklet 
+                    if (!audioContext) {
+                        audioContext = new AudioContext({ sampleRate: targetSampleRate });
+                        log(`AudioContext created (Sample Rate: ${audioContext.sampleRate}Hz)`);
+                        if (audioContext.sampleRate !== targetSampleRate) {
+                             log(`Warning: AudioContext sample rate (${audioContext.sampleRate}Hz) differs from target ${targetSampleRate}Hz. Resampling needed or issues may occur.`, 'info');
+                        }
+                        try {
+                             await audioContext.audioWorklet.addModule(processorPath);
+                             log('AudioWorklet module added successfully.');
+                        } catch (e) {
+                             log(`Failed to add AudioWorklet module from ${processorPath}: ${e}`, 'error');
+                             updateStatus('Error setting up audio processing.');
+                             startMicBtn.disabled = false;
+                             if (audioContext && audioContext.state !== 'closed') await audioContext.close();
+                             audioContext = null;
+                             return;
+                        }
+                    } else if (audioContext.state === 'suspended') {
+                        await audioContext.resume();
+                        log('AudioContext resumed.');
+                    }
+
+                    // 2. Get Microphone Stream
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: false,
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            channelCount: 1,
+                            sampleRate: audioContext.sampleRate 
+                        },
+                    });
+                    micSource = audioContext.createMediaStreamSource(stream);
+                    log('Microphone stream obtained.');
+
+                    // 3. Create AudioWorkletNode
+                    audioProcessorNode = new AudioWorkletNode(audioContext, 'recognizer-processor', {
+                         processorOptions: {
+                             sampleRate: audioContext.sampleRate,
+                             bufferSize: 4096 
+                         }
+                     });
+                    log('AudioWorkletNode created.');
+
+                     // 4. Handle messages from the worklet (audio data)
+                     audioProcessorNode.port.onmessage = async (event) => {
+                         if (event.data.type === 'audioData' && recognizerPipeline) {
+                             const audio = new Float32Array(event.data.audio);
+                             updateStatus('Transcribing audio chunk...');
+                             
+                             try {
+                                 const output = await recognizerPipeline(audio, {
+                                    chunk_length_s: 5,
+                                 });
+                                 
+                                 log(`Transcription: ${output.text}`, 'success');
+                                 transcriptionEl.textContent += output.text + ' '; 
+                                 updateStatus('Transcription complete. Listening...');
+                                 
+                             } catch (transcriptionError) {
+                                  log(`Transcription error: ${transcriptionError}`, 'error');
+                                  console.error(transcriptionError);
+                                  updateStatus('Transcription error occurred.');
+                             }
+                             
+                         } else if (event.data.type === 'processorReady') {
+                             log('Audio processor reported ready.');
+                         }
+                     };
+                     audioProcessorNode.port.onmessageerror = (err) => {
+                         log('Error receiving message from audio processor:' + err, 'error');
+                     };
+
+                    // 5. Connect the audio graph: Mic -> Worklet
+                    micSource.connect(audioProcessorNode);
+
+                    isMicActive = true;
+                    stopMicBtn.disabled = false;
+                    updateStatus('Microphone active. Speak to transcribe.');
+
+                } catch (error) {
+                    log(`Error starting microphone/pipeline: ${error}`, 'error');
+                    console.error(error);
+                    updateStatus(`Error starting microphone: ${error.name}`);
+                    startMicBtn.disabled = false;
+                    await stopMicrophoneAndProcessing(); 
+                }
+            });
+
+            // --- Stop Microphone (No changes needed) --- 
+            stopMicBtn.addEventListener('click', async () => {
+                await stopMicrophoneAndProcessing();
+                updateStatus('Microphone stopped.');
+            });
+            
+            async function stopMicrophoneAndProcessing() {
+                if (!isMicActive) return;
+                log('Stopping microphone and audio processing...');
+                stopMicBtn.disabled = true;
+                
+                try {
+                    if (micSource && audioProcessorNode) {
+                        micSource.disconnect(audioProcessorNode);
+                        log('Audio graph disconnected.');
+                    }
+                    if (micSource?.mediaStream?.getTracks) {
+                        micSource.mediaStream.getTracks().forEach(track => track.stop());
+                        log('Microphone tracks stopped.');
+                    }
+                    micSource = null;
+                } catch (error) {
+                     log(`Error stopping microphone: ${error}`, 'error');
+                } finally {
+                     isMicActive = false;
+                     startMicBtn.disabled = recognizerPipeline ? false : true; 
+                }
+            }
+
+            // --- Cleanup Audio (No changes needed) --- 
+            cleanupBtn.addEventListener('click', async () => {
+                startMicBtn.disabled = true;
+                stopMicBtn.disabled = true;
+                cleanupBtn.disabled = true;
+                updateStatus('Cleaning up audio...');
+                
+                await stopMicrophoneAndProcessing();
+                
+                if (audioContext && audioContext.state !== 'closed') {
+                    try {
+                        await audioContext.close();
+                        log('AudioContext closed.');
+                     } catch (e) { log(`Error closing AudioContext: ${e}`, 'error'); }
+                    audioContext = null;
+                }
+                
+                audioProcessorNode = null;
+                
+                updateStatus('Audio cleanup complete. Pipeline still loaded.');
+                startMicBtn.disabled = recognizerPipeline ? false : true; 
+                cleanupBtn.disabled = recognizerPipeline ? false : true; 
+            });
+
+            // --- Initial State & Library Load ---
+            loadPipelineBtn.disabled = true; // Start disabled
+            initializeLibrary(); // Attempt to load library dynamically
+
+        });
+    </script>
+</body>
+</html> 

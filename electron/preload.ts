@@ -1,8 +1,28 @@
-console.log("Preload script starting...")
+// Safe console logging to prevent EPIPE errors
+const safeLog = (...args: any[]) => {
+  try {
+    console.log(...args);
+  } catch (error: any) {
+    // Silently handle EPIPE errors
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPIPE') {
+      // Process communication pipe is closed, ignore
+    } else if (error) {
+      // Try to log to stderr instead
+      try {
+        process.stderr.write(`Error during logging: ${error?.message || String(error)}\n`);
+      } catch (_) {
+        // Last resort, ignore completely
+      }
+    }
+  }
+};
+
+// Original console.log statements replaced with safeLog
+safeLog("Preload script starting...")
 import { contextBridge, ipcRenderer } from "electron"
 const { shell } = require("electron")
 
-export const PROCESSING_EVENTS = {
+const PROCESSING_EVENTS = {
   //global states
   UNAUTHORIZED: "procesing-unauthorized",
   NO_SCREENSHOTS: "processing-no-screenshots",
@@ -23,7 +43,7 @@ export const PROCESSING_EVENTS = {
 } as const
 
 // At the top of the file
-console.log("Preload script is running")
+safeLog("Preload script is running")
 
 const electronAPI = {
   // Original methods
@@ -38,10 +58,10 @@ const electronAPI = {
   deleteScreenshot: (path: string) =>
     ipcRenderer.invoke("delete-screenshot", path),
   toggleMainWindow: async () => {
-    console.log("toggleMainWindow called from preload")
+    safeLog("toggleMainWindow called from preload")
     try {
       const result = await ipcRenderer.invoke("toggle-window")
-      console.log("toggle-window result:", result)
+      safeLog("toggle-window result:", result)
       return result
     } catch (error) {
       console.error("Error in toggleMainWindow:", error)
@@ -236,11 +256,169 @@ const electronAPI = {
       ipcRenderer.removeListener("delete-last-screenshot", subscription)
     }
   },
-  deleteLastScreenshot: () => ipcRenderer.invoke("delete-last-screenshot")
+  deleteLastScreenshot: () => ipcRenderer.invoke("delete-last-screenshot"),
+  
+  // Add Voice Input support
+  onToggleVoiceInput: (callback: () => void) => {
+    const subscription = () => callback();
+    ipcRenderer.on('toggle-voice-input', subscription);
+    return () => {
+      ipcRenderer.removeListener('toggle-voice-input', subscription);
+    };
+  },
+  // New methods for voice input and text input
+  toggleVoiceInput: () => ipcRenderer.invoke("toggle-voice-input"),
+  showTextInputDialog: () => ipcRenderer.invoke("show-input-dialog"),
+  
+  // Dialog submission and cancellation with session IDs
+  dialogSubmit: (sessionId: string, text: string) => 
+    ipcRenderer.send("dialog-submit", sessionId, text),
+  dialogCancel: (sessionId: string) => 
+    ipcRenderer.send("dialog-cancel", sessionId),
+  
+  // Overlay-based input dialog events  
+  onShowInputOverlay: (callback: (sessionId: string) => void) => {
+    const subscription = (_: any, sessionId: string) => callback(sessionId);
+    ipcRenderer.on('show-input-overlay', subscription);
+    return () => {
+      ipcRenderer.removeListener('show-input-overlay', subscription);
+    };
+  },
+  onCloseInputOverlay: (callback: () => void) => {
+    const subscription = () => callback();
+    ipcRenderer.on('close-input-overlay', subscription);
+    return () => {
+      ipcRenderer.removeListener('close-input-overlay', subscription);
+    };
+  },
+  
+  // Add a specific method for the handle-ai-query channel
+  handleAiQuery: (args: { query: string; language: string }) => 
+    ipcRenderer.invoke('handle-ai-query', args),
+
+  // --- Methods needed for Whisper IPC ---
+  // Ensure invoke is exposed (if not already covered by a generic one)
+  invoke: (channel: string, ...args: any[]) => {
+      safeLog(`Preload: Invoking ${channel} with args:`, args);
+      // Validate channel names if needed for security
+      const allowedInvokeChannels = [
+        'start-audio-capture', 'stop-audio-capture', 
+        // Add other existing invoke channels used by your app here
+        'open-subscription-portal', 'open-settings-portal', 'update-content-dimensions', 
+        'clear-store', 'get-screenshots', 'delete-screenshot', 'toggle-window',
+        'trigger-screenshot', 'trigger-process-screenshots', 'trigger-reset',
+        'trigger-move-left', 'trigger-move-right', 'trigger-move-up', 'trigger-move-down',
+        'start-update', 'install-update', 'decrement-credits', 'get-config',
+        'update-config', 'check-api-key', 'validate-api-key', 'openExternal',
+        'delete-last-screenshot', 'toggle-voice-input', 'show-input-dialog', 
+        'handle-ai-query'
+      ];
+      if (!allowedInvokeChannels.includes(channel)) {
+          safeLog(`Preload ERROR: Denied invoke call to untrusted channel: ${channel}`);
+          throw new Error(`Untrusted invoke channel: ${channel}`);
+      }
+      return ipcRenderer.invoke(channel, ...args);
+  },
+  // Ensure on is exposed for general listeners (if not already covered)
+  on: (channel: string, func: (...args: any[]) => void) => {
+    safeLog(`Preload: Registering generic listener for ${channel}`);
+    const allowedListenerChannels = [
+        // Add other existing listener channels used by your app here
+        'screenshot-taken', 'reset-view', 'debug-success', 'debug-error', 
+        'solution-error', 'processing-no-screenshots', 'out-of-credits', 
+        'problem-extracted', 'solution-success', 'unauthorized', 
+        'subscription-updated', 'subscription-portal-closed', 'reset',
+        'update-available', 'update-downloaded', 'credits-updated', 
+        'show-settings-dialog', 'api-key-invalid', 'delete-last-screenshot',
+        'toggle-voice-input', 'show-input-overlay', 'close-input-overlay',
+        'restore-focus'
+        // DO NOT add 'audio-data-chunk' here if using specific handler below
+    ];
+     if (!allowedListenerChannels.includes(channel)) {
+         safeLog(`Preload ERROR: Denied listener registration for untrusted channel: ${channel}`);
+         throw new Error(`Untrusted listener channel: ${channel}`);
+     }
+    // Deliberately strip event as it includes `sender`
+    const subscription = (event: Electron.IpcRendererEvent, ...args: any[]) => func(...args);
+    ipcRenderer.on(channel, subscription);
+    // Return a cleanup function
+    return () => {
+      safeLog(`Preload: Removing generic listener for ${channel}`);
+      ipcRenderer.removeListener(channel, subscription);
+    };
+  },
+
+  // Explicit listener setup for audio data
+  onAudioDataChunk: (callback: (audioBuffer: ArrayBuffer) => void) => {
+    const handler = (event: Electron.IpcRendererEvent, audioBuffer: ArrayBuffer) => {
+        // Validate data if possible (e.g., check if it's an ArrayBuffer)
+        if (!(audioBuffer instanceof ArrayBuffer)) {
+            safeLog('Preload ERROR: Received non-ArrayBuffer data on audio-data-chunk channel');
+            return; 
+        }
+        // safeLog('Preload: Received audio-data-chunk'); // Can be very verbose
+        callback(audioBuffer);
+    };
+    const channelName = 'audio-data-chunk';
+    ipcRenderer.on(channelName, handler);
+    safeLog(`Preload: Registered specific listener for ${channelName}`);
+    return () => {
+        safeLog(`Preload: Removing specific listener for ${channelName}`);
+        ipcRenderer.removeListener(channelName, handler);
+    };
+  },
+  // --- End of Whisper IPC Methods ---
+
+  // Transcribe audio data
+  transcribeAudio: async (audioBlob: Blob) => {
+    try {
+      safeLog(`Preload: Received audio blob for transcription (type: ${audioBlob.type}, size: ${audioBlob.size} bytes)`);
+      
+      if (audioBlob.size === 0) {
+        safeLog('Preload ERROR: Received empty audio blob (0 bytes)');
+        return { success: false, error: 'Empty audio data - please try again' };
+      }
+      
+      // First, check if we need to do any client-side conversion
+      let finalBlob = audioBlob;
+      
+      // If it's not a supported format, we'll let the backend handle it
+      // by adding a mime type hint
+      const supportedFormats = ['audio/webm', 'audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/ogg'];
+      const isSupported = supportedFormats.some(format => audioBlob.type.includes(format));
+      
+      if (!isSupported) {
+        safeLog(`Preload: Audio format ${audioBlob.type} may not be directly supported by OpenAI`);
+      }
+      
+      // Convert Blob to ArrayBuffer for sending over IPC
+      const arrayBuffer = await finalBlob.arrayBuffer();
+      
+      if (arrayBuffer.byteLength === 0) {
+        safeLog('Preload ERROR: ArrayBuffer is empty (0 bytes)');
+        return { success: false, error: 'Empty audio data after conversion - please try again' };
+      }
+      
+      safeLog(`Preload: Converted blob to ArrayBuffer successfully (size: ${arrayBuffer.byteLength} bytes)`);
+      
+      // Send original mime type as well to help backend choose correct extension
+      const transcribePayload = {
+        buffer: arrayBuffer,
+        mimeType: finalBlob.type || 'audio/mpeg' // Default to mp3 if not set
+      };
+      
+      safeLog(`Preload: Sending transcription request with MIME type: ${transcribePayload.mimeType}`);
+      
+      return await ipcRenderer.invoke('transcribe-audio', transcribePayload);
+    } catch (error) {
+      safeLog('Preload ERROR: Failed to process audio blob:', error);
+      return { success: false, error: 'Failed to process audio data' };
+    }
+  },
 }
 
 // Before exposing the API
-console.log(
+safeLog(
   "About to expose electronAPI with methods:",
   Object.keys(electronAPI)
 )
@@ -248,7 +426,7 @@ console.log(
 // Expose the API
 contextBridge.exposeInMainWorld("electronAPI", electronAPI)
 
-console.log("electronAPI exposed to window")
+safeLog("electronAPI exposed to window")
 
 // Add this focus restoration handler
 ipcRenderer.on("restore-focus", () => {
