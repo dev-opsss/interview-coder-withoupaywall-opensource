@@ -100,8 +100,10 @@ Note: The application is **NOT** invisible to:
 - Screen Recording Permission for Terminal/IDE
   - On macOS:
     1. Go to System Preferences > Security & Privacy > Privacy > Screen Recording
-    2. Ensure that CodeInterviewAssist has screen recording permission enabled
-    3. Restart CodeInterviewAssist after enabling permissions
+    2. Ensure that CodeInterviewAssist (or the Terminal/IDE you run it from) has screen recording permission enabled.
+    3. **Microphone Permission**: When features using audio input (like potential future voice interaction) are used for the first time, macOS will prompt for microphone access. You **must grant this permission** for audio capture to function.
+    4. Restart CodeInterviewAssist after enabling permissions.
+    5. **Note on Audio Source**: The initial native macOS audio capture implementation (if used) sources audio from the default **microphone input**. It does **not** require installing virtual audio devices like BlackHole for this specific functionality.
   - On Windows:
     - No additional permissions needed
   - On Linux:
@@ -143,6 +145,8 @@ stealth-run.bat
 chmod +x stealth-run.sh
 ./stealth-run.sh
 ```
+
+# Developer Note (macOS): Building the application from source on macOS requires Xcode and its Command Line Tools (install via `xcode-select --install`). End-users running pre-built packages do not need this.
 
 **IMPORTANT**: The application window will be invisible by default! Use Ctrl+B (or Cmd+B on Mac) to toggle visibility.
 

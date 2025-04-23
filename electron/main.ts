@@ -398,13 +398,34 @@ async function createWindow(): Promise<void> {
   
   // Set COOP and COEP headers for cross-origin isolation
   ses.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Cross-Origin-Opener-Policy': ['same-origin'],
-        'Cross-Origin-Embedder-Policy': ['credentialless'],
-        'Cross-Origin-Resource-Policy': ['cross-origin']
+    // Create headers as Record<string, string[]> which is typical for modification
+    const newHeaders: Record<string, string[]> = {}; 
+
+    // Copy existing headers, ensuring lowercase keys and string[] values
+    if (details.responseHeaders) {
+      for (const key in details.responseHeaders) {
+        if (Object.prototype.hasOwnProperty.call(details.responseHeaders, key)) {
+          const value = details.responseHeaders[key];
+          const lowerKey = key.toLowerCase();
+
+          if (typeof value === 'string') {
+            newHeaders[lowerKey] = [value]; // Convert string to string[]
+          } else if (Array.isArray(value)) {
+            newHeaders[lowerKey] = value; // Keep existing string[]
+          }
+          // Silently ignore headers with invalid types
+        }
       }
+    }
+
+    // Add/overwrite the necessary COOP/COEP headers (lowercase, string[])
+    newHeaders['cross-origin-opener-policy'] = ['same-origin'];
+    newHeaders['cross-origin-embedder-policy'] = ['credentialless'];
+    newHeaders['cross-origin-resource-policy'] = ['cross-origin'];
+
+    // Use type assertion to bypass conflicting/inaccurate type definitions
+    callback({ 
+      responseHeaders: newHeaders as any 
     });
   });
 
@@ -940,6 +961,105 @@ async function initializeApp() {
       moveWindowDown: () => moveWindowVertical((y) => y + state.step)
     })
     await createWindow()
+
+    // --- Test loading and calling the native macOS audio module ---
+    if (process.platform === 'darwin') { // Only run on macOS
+      try {
+        // Construct path relative to the current file (__dirname in main.ts)
+        // __dirname points to the directory containing the executing JS file (e.g., dist-electron)
+        const basePath = isDev 
+          ? path.resolve(__dirname, '..') // Go up one level from dist-electron to project root in dev
+          : process.resourcesPath; // Production path might still need adjustment
+          
+        const modulePath = path.join(basePath, 'native-modules/macos/build/Release/audio_capture_macos.node');
+        
+        safeLog(`Attempting to load native module from: ${modulePath}`);
+        const nativeAudio = require(modulePath);
+        safeLog("Native macOS module loaded successfully.");
+
+        // --- Test Device Listing ---
+        const devices = nativeAudio.listDevices();
+        safeLog("Available Audio Devices (macOS):");
+        let targetDeviceUID = ""; // Store the UID to use for capture
+        if (Array.isArray(devices)) {
+            devices.forEach((device, index) => {
+                safeLog(`  [${index}] ID: ${device.id}, Name: ${device.name}`);
+                // ----> CHOOSE YOUR TARGET DEVICE HERE <---- 
+                // Example: Use Microsoft Teams Audio if found, otherwise default to first device
+                if (device.name === "Microsoft Teams Audio") {
+                    targetDeviceUID = device.id;
+                } else if (!targetDeviceUID && index === 0) {
+                    // Fallback to the first device if specific one not found
+                    // targetDeviceUID = device.id; // Uncomment to fallback
+                } 
+                // Or uncomment below to hardcode an ID if needed:
+                // targetDeviceUID = "MSLoopbackDriverDevice_UID"; 
+            });
+        } else {
+            safeLog(devices); // Log as is if not an array
+        }
+        // --------------------------
+
+        // --- Test Start/Stop Capture ---
+        if (!targetDeviceUID) {
+            safeError("No target device UID selected or found for capture test.");
+        } else {
+            safeLog(`Selected Target Device UID for capture: ${targetDeviceUID}`);
+            
+            const dummyDataCallback = (audioChunk: ArrayBuffer) => {
+                try {
+                    // Later: This will receive ArrayBuffer data from the native side
+                    // For now, it might not be called until ThreadSafeFunction is set up
+                    safeLog("JavaScript dummyDataCallback received chunk (size: " + audioChunk.byteLength + ")");
+
+                    // --- Add any actual processing logic here within the try block ---
+                    // Example: Convert to Float32Array
+                    // const floatArray = new Float32Array(audioChunk);
+                    // Send to renderer, etc.
+                    // getMainWindow()?.webContents.send('audio-data', floatArray); // Example
+                    // -------------------------------------------------------------
+
+                } catch (jsError) {
+                    safeError("Error inside JavaScript audio callback:", jsError);
+                }
+            };
+            
+            try {
+                safeLog("Attempting to start capture...");
+                const startSuccess = nativeAudio.startCapture(targetDeviceUID, dummyDataCallback);
+                if (startSuccess) {
+                    safeLog("nativeAudio.startCapture call succeeded. Capture should be active.");
+
+                    // Schedule stop capture after a delay
+                    setTimeout(() => {
+                        try {
+                            safeLog("Attempting to stop capture...");
+                            const stopSuccess = nativeAudio.stopCapture();
+                            if (stopSuccess) {
+                                safeLog("nativeAudio.stopCapture call succeeded.");
+                            } else {
+                                safeLog("nativeAudio.stopCapture call returned false (or threw).");
+                            }
+                        } catch (stopError) {
+                             safeError("Error calling nativeAudio.stopCapture:", stopError);
+                        }
+                    }, 5000); // Stop after 5 seconds
+
+                } else {
+                    safeLog("nativeAudio.startCapture call returned false (or threw).");
+                }
+            } catch(startError) {
+                safeError("Error calling nativeAudio.startCapture:", startError);
+            }
+        }
+        // ----------------------------
+
+      } catch (error) {
+        safeError("Failed to load or call native macOS audio module:", error);
+      }
+    }
+    // --- End test code ---
+
     state.shortcutsHelper?.registerGlobalShortcuts()
 
     // Initialize auto-updater regardless of environment
