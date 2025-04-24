@@ -331,7 +331,7 @@ const electronAPI = {
         'update-available', 'update-downloaded', 'credits-updated', 
         'show-settings-dialog', 'api-key-invalid', 'delete-last-screenshot',
         'toggle-voice-input', 'show-input-overlay', 'close-input-overlay',
-        'restore-focus'
+        'restore-focus', 'audio-capture-error', 'audio-capture-status'
         // DO NOT add 'audio-data-chunk' here if using specific handler below
     ];
      if (!allowedListenerChannels.includes(channel)) {
@@ -414,6 +414,32 @@ const electronAPI = {
       safeLog('Preload ERROR: Failed to process audio blob:', error);
       return { success: false, error: 'Failed to process audio data' };
     }
+  },
+
+  // New audio capture notification events
+  onAudioCaptureError: (callback: (error: {
+    type: string;
+    message: string;
+    details: string;
+    troubleshooting: string[];
+  }) => void) => {
+    const subscription = (_: any, error: any) => callback(error);
+    ipcRenderer.on('audio-capture-error', subscription);
+    return () => {
+      ipcRenderer.removeListener('audio-capture-error', subscription);
+    };
+  },
+  
+  onAudioCaptureStatus: (callback: (status: {
+    status: 'started' | 'stopped';
+    usingTeamsDriver?: boolean;
+    message: string;
+  }) => void) => {
+    const subscription = (_: any, status: any) => callback(status);
+    ipcRenderer.on('audio-capture-status', subscription);
+    return () => {
+      ipcRenderer.removeListener('audio-capture-status', subscription);
+    };
   },
 }
 

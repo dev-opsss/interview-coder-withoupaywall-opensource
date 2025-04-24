@@ -13,7 +13,8 @@
     "package": "npm run build && electron-builder build",
     "package-mac": "npm run build && electron-builder build --mac",
     "package-win": "npm run build && electron-builder build --win",
-    "rebuild:native": "npx @electron/rebuild -v 29.1.4 -w native-modules/macos -d"
+    "rebuild:native": "npx @electron/rebuild -v 29.1.4 -w native-modules/macos -d",
+    "rebuild:native:all": "node scripts/rebuild-native-modules.js"
   },
   "build": {
     "appId": "com.chunginlee.interviewcoder",
@@ -105,6 +106,14 @@
         "to": ".env",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "native-modules/",
+        "to": "native-modules/",
+        "filter": [
+          "**/*.node",
+          "**/build/Release/**"
         ]
       }
     ],
