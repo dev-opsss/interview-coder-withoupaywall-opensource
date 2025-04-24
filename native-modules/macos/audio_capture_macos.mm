@@ -19,6 +19,9 @@
 using namespace Napi;
 using namespace std;
 
+// Define max allowed size for Float32Array to prevent crashes
+#define MAX_FLOAT32_ARRAY_SIZE 1073741824 // 1GB limit as a safety cap
+
 // Audio data structure
 struct AudioData {
     float* data;
@@ -63,10 +66,12 @@ double g_testToneFrequency = 440.0; // 440 Hz (A4 note)
 double g_testTonePhase = 0.0; // Current phase of the sine wave
 
 // Global state (Use with caution in production; consider a class)
-// std::atomic<bool> g_isCapturing(false); // REMOVED - duplicate
 AudioUnit g_audioUnit = nullptr;
 AudioComponent g_audioComponent = nullptr;
 static AudioDeviceID g_targetDeviceID = kAudioDeviceUnknown;
+
+// Add a global variable to track the audio device name
+static std::string g_audioDeviceName = "Unknown";
 
 // Helper function to convert CFStringRef to std::string
 std::string ConvertCFString(CFStringRef cfStr) {
@@ -130,7 +135,6 @@ OSStatus GetAudioDeviceIDFromUID(const std::string& uid, AudioDeviceID& deviceID
     return kAudioHardwareBadDeviceError; // Indicate device not found
 }
 
-// --- MOVED DEFINITIONS EARLIER --- 
 struct AudioDeviceInfo {
     string id;
     string name;
@@ -201,7 +205,6 @@ vector<AudioDeviceInfo> ListDevicesInternal() {
 
     return devices;
 }
-// --- END MOVED DEFINITIONS ---
 
 // Function to list audio devices using CoreAudio (Public API)
 Napi::Value ListDevices(const Napi::CallbackInfo& info) {
@@ -333,16 +336,46 @@ static OSStatus audioInputCallback(void *inRefCon,
                 break;
             }
         }
+        
+        // Add logging for audio detection
+        static bool lastWasSilence = true;
+        static int silenceCounter = 0;
+        static int audioCounter = 0;
+        
+        if (allZeros) {
+            silenceCounter++;
+            if (silenceCounter == 1 || (silenceCounter % 300 == 0)) { // Keep as is
+                std::cout << "[audio_capture_macos] Silence detected from " << g_audioDeviceName << std::endl;
+                lastWasSilence = true;
+            }
+            audioCounter = 0;
+        } else {
+            audioCounter++;
+            // Only log when first detecting audio (transition from silence) or very infrequently
+            if ((lastWasSilence && audioCounter == 1) || (audioCounter % 3000 == 0)) { // Drastically reduced logging
+                std::cout << "[audio_capture_macos] Audio detected from " << g_audioDeviceName << std::endl;
+                lastWasSilence = false;
+            }
+            silenceCounter = 0;
+        }
     }
     
     // Generate test tone if needed
     if (g_generateTestTone && (allZeros || audioRenderFailed)) {
         std::cout << "[audio_capture_macos] Generating test tone" << std::endl;
+        
+        // Ensure the incoming frame count isn't too large 
+        UInt32 safeFrameCount = inNumberFrames;
+        if (safeFrameCount > 8192) { // Reasonable upper limit
+            std::cout << "[audio_capture_macos] Limiting test tone frames from " << inNumberFrames << " to 8192" << std::endl;
+            safeFrameCount = 8192;
+        }
+        
         float amplitude = 0.3f;
         const double twoPi = 2.0 * M_PI;
         double phaseIncrement = twoPi * g_testToneFrequency / asbd.mSampleRate;
         
-        for (UInt32 i = 0; i < inNumberFrames; i++) {
+        for (UInt32 i = 0; i < safeFrameCount; i++) {
             float value = amplitude * sinf(g_testTonePhase);
             for (UInt32 ch = 0; ch < asbd.mChannelsPerFrame; ch++) {
                 samples[i * asbd.mChannelsPerFrame + ch] = value;
@@ -352,6 +385,12 @@ static OSStatus audioInputCallback(void *inRefCon,
                 g_testTonePhase -= twoPi;
             }
         }
+        
+        // If we limited the frame count, zero out the remaining samples
+        if (safeFrameCount < inNumberFrames) {
+            const UInt32 remainingSamples = (inNumberFrames - safeFrameCount) * asbd.mChannelsPerFrame;
+            memset(&samples[safeFrameCount * asbd.mChannelsPerFrame], 0, remainingSamples * sizeof(float));
+        }
     } else if (audioRenderFailed) {
         // Fill with zeros if render failed
         memset(bufferList.mBuffers[0].mData, 0, bufferList.mBuffers[0].mDataByteSize);
@@ -359,6 +398,14 @@ static OSStatus audioInputCallback(void *inRefCon,
     
     // Create the data buffer
     const UInt32 numSamples = inNumberFrames * asbd.mChannelsPerFrame;
+    
+    // Add safety check for buffer size
+    if (numSamples > MAX_FLOAT32_ARRAY_SIZE) {
+        std::cerr << "[audio_capture_macos] Error: Audio buffer size too large: " << numSamples 
+                  << " samples. Skipping this buffer." << std::endl;
+        return noErr;
+    }
+    
     float* audioDataBuffer = new (std::nothrow) float[numSamples];
     
     if (!audioDataBuffer) {
@@ -402,6 +449,14 @@ static OSStatus audioInputCallback(void *inRefCon,
             try {
                 // Create JS objects
                 Object obj = Object::New(env);
+                
+                // Safety check to prevent V8 from crashing due to excessively large arrays
+                if (data->length > MAX_FLOAT32_ARRAY_SIZE) {
+                    std::cerr << "[audio_capture_macos] Warning: Truncating excessively large audio buffer " 
+                              << data->length << " to " << MAX_FLOAT32_ARRAY_SIZE << std::endl;
+                    data->length = MAX_FLOAT32_ARRAY_SIZE;
+                }
+                
                 Napi::Float32Array array = Napi::Float32Array::New(env, data->length);
                 memcpy(array.Data(), data->data, data->length * sizeof(float));
                 
@@ -466,14 +521,69 @@ static OSStatus GetDefaultInputDeviceID(AudioDeviceID &outDeviceID) {
         std::cerr << "[audio_capture_macos] Failed to get default input device: " << status << std::endl;
         outDeviceID = kAudioDeviceUnknown;
     } else {
+        // Get the device name
+        CFStringRef deviceName = NULL;
+        UInt32 dataSize = sizeof(CFStringRef);
+        AudioObjectPropertyAddress nameAddress = {
+            kAudioDevicePropertyDeviceNameCFString,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        OSStatus nameStatus = AudioObjectGetPropertyData(outDeviceID, &nameAddress, 
+                                                      0, NULL, &dataSize, &deviceName);
+        if (nameStatus == noErr && deviceName) {
+            char nameBuffer[256];
+            if (CFStringGetCString(deviceName, nameBuffer, sizeof(nameBuffer), kCFStringEncodingUTF8)) {
+                g_audioDeviceName = std::string(nameBuffer) + " (Default Input)";
+            }
+            CFRelease(deviceName);
+        } else {
+            g_audioDeviceName = "Default Input Device";
+        }
         std::cout << "[audio_capture_macos] Found default input device ID: " << outDeviceID << std::endl;
     }
     
     return status;
 }
 
-// Function to find BlackHole device
-static OSStatus FindBlackHoleDeviceID(AudioDeviceID &outDeviceID) {
+// Check microphone permission status
+static bool CheckMicrophonePermission() {
+    AVAuthorizationStatus authStatus = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+    switch (authStatus) {
+        case AVAuthorizationStatusAuthorized:
+            std::cout << "[audio_capture_macos] Microphone permission is granted" << std::endl;
+            return true;
+        case AVAuthorizationStatusDenied:
+            std::cerr << "[audio_capture_macos] Microphone permission is denied by user" << std::endl;
+            return false;
+        case AVAuthorizationStatusRestricted:
+            std::cerr << "[audio_capture_macos] Microphone permission is restricted" << std::endl;
+            return false;
+        case AVAuthorizationStatusNotDetermined:
+            std::cout << "[audio_capture_macos] Microphone permission not determined yet" << std::endl;
+            return false;
+        default:
+            std::cerr << "[audio_capture_macos] Unknown microphone permission status" << std::endl;
+            return false;
+    }
+}
+
+// Request microphone permission
+static void RequestMicrophonePermission(const std::function<void(bool)>& completion) {
+    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (granted) {
+                std::cout << "[audio_capture_macos] Microphone permission granted" << std::endl;
+            } else {
+                std::cerr << "[audio_capture_macos] Microphone permission denied" << std::endl;
+            }
+            completion(granted);
+        });
+    }];
+}
+
+// Function to find Microsoft Teams Audio driver
+static OSStatus FindTeamsAudioDeviceID(AudioDeviceID &outDeviceID) {
     // Start with no device found
     outDeviceID = kAudioDeviceUnknown;
     
@@ -515,7 +625,7 @@ static OSStatus FindBlackHoleDeviceID(AudioDeviceID &outDeviceID) {
         return status;
     }
     
-    // Iterate through the devices looking for BlackHole
+    // Iterate through the devices looking for Microsoft Teams Audio driver
     for (int i = 0; i < deviceCount; i++) {
         // Get the device name
         AudioObjectPropertyAddress nameAddress = {
@@ -529,16 +639,37 @@ static OSStatus FindBlackHoleDeviceID(AudioDeviceID &outDeviceID) {
         status = AudioObjectGetPropertyData(deviceList[i], &nameAddress, 
                                           0, NULL, &propertySize, &deviceName);
         
+        // Get the device UID too
+        CFStringRef deviceUID = NULL;
+        AudioObjectPropertyAddress uidAddress = {
+            kAudioDevicePropertyDeviceUID,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        UInt32 uidSize = sizeof(CFStringRef);
+        OSStatus uidStatus = AudioObjectGetPropertyData(deviceList[i], &uidAddress,
+                                                      0, NULL, &uidSize, &deviceUID);
+        
         if (status == noErr && deviceName) {
             // Convert CFString to C string
             char deviceNameBuffer[256];
             if (CFStringGetCString(deviceName, deviceNameBuffer, sizeof(deviceNameBuffer), kCFStringEncodingUTF8)) {
                 std::string devName = deviceNameBuffer;
                 
-                // Check if this is BlackHole and it has input streams
-                if (devName.find("BlackHole") != std::string::npos || 
-                    devName.find("Blackhole") != std::string::npos) {
-                    
+                // Check if this is the Microsoft Teams Audio driver
+                bool isTeamsDriver = (devName.find("Microsoft Teams Audio") != std::string::npos);
+                
+                // Also check the device UID if available
+                if (uidStatus == noErr && deviceUID) {
+                    char deviceUIDBuffer[256];
+                    if (CFStringGetCString(deviceUID, deviceUIDBuffer, sizeof(deviceUIDBuffer), kCFStringEncodingUTF8)) {
+                        std::string devUID = deviceUIDBuffer;
+                        isTeamsDriver = isTeamsDriver || (devUID.find("MSLoopbackDriverDevice_UID") != std::string::npos);
+                    }
+                    CFRelease(deviceUID);
+                }
+                
+                if (isTeamsDriver) {
                     // Check if device has input streams
                     AudioObjectPropertyAddress streamsAddress = {
                         kAudioDevicePropertyStreams,
@@ -550,9 +681,10 @@ static OSStatus FindBlackHoleDeviceID(AudioDeviceID &outDeviceID) {
                     status = AudioObjectGetPropertyDataSize(deviceList[i], &streamsAddress, 
                                                           0, NULL, &streamSize);
                     if (status == noErr && streamSize > 0) {
-                        std::cout << "[audio_capture_macos] Found BlackHole device: " << deviceNameBuffer 
+                        std::cout << "[audio_capture_macos] Found Microsoft Teams Audio driver: " << deviceNameBuffer 
                                   << " (ID: " << deviceList[i] << ")" << std::endl;
                         outDeviceID = deviceList[i];
+                        g_audioDeviceName = std::string(deviceNameBuffer) + " (Teams Driver)";
                         CFRelease(deviceName);
                         delete[] deviceList;
                         return noErr;
@@ -567,18 +699,19 @@ static OSStatus FindBlackHoleDeviceID(AudioDeviceID &outDeviceID) {
     // Cleanup
     delete[] deviceList;
     
-    std::cout << "[audio_capture_macos] BlackHole device not found" << std::endl;
-    return noErr;  // Not finding BlackHole is not an error, we'll fall back to default
+    std::cout << "[audio_capture_macos] Microsoft Teams Audio driver not found" << std::endl;
+    return noErr;  // Not finding the Teams driver is not an error, we'll fall back to default
 }
 
-// Function to create and configure the audio unit
+// Function to create and configure the audio unit (Updated to prioritize Teams Audio driver)
 static OSStatus CreateAndConfigureAudioUnit() {
     OSStatus status;
     
-    // 1. Find Target Device (Prefer BlackHole, fallback to default input)
-    status = FindBlackHoleDeviceID(g_targetDeviceID);
+    // 1. Try to find Microsoft Teams Audio driver first
+    status = FindTeamsAudioDeviceID(g_targetDeviceID);
     if (status != noErr || g_targetDeviceID == kAudioDeviceUnknown) {
-        std::cerr << "[audio_capture_macos] Could not find BlackHole, falling back to default input device." << std::endl;
+        std::cout << "[audio_capture_macos] Teams Audio driver not found, falling back to default input device." << std::endl;
+        // Fall back to default input device
         status = GetDefaultInputDeviceID(g_targetDeviceID);
         if (status != noErr || g_targetDeviceID == kAudioDeviceUnknown) {
             std::cerr << "[audio_capture_macos] Failed to find a suitable audio input device." << std::endl;
@@ -606,7 +739,7 @@ static OSStatus CreateAndConfigureAudioUnit() {
     // 3. Configure Audio Unit Properties
     // Important Debug Message
     std::cout << "[audio_capture_macos] Created audio unit instance, now configuring." << std::endl;
-    std::cout << "[audio_capture_macos] Using device ID: " << g_targetDeviceID << std::endl;
+    std::cout << "[audio_capture_macos] Using device: " << g_audioDeviceName << " (ID: " << g_targetDeviceID << ")" << std::endl;
     
     // Enable input on the AUHAL (bus 1 is input)
     UInt32 enableIO = 1;
@@ -622,7 +755,7 @@ static OSStatus CreateAndConfigureAudioUnit() {
     // When test tone is enabled, we should also enable output
     if (g_generateTestTone) {
         // Enable output on the AUHAL (bus 0 is output) for test tone monitoring
-        enableIO = 0; // CHANGED from 1 to 0 to disable output
+        enableIO = 0; // Disable output 
         std::cout << "[audio_capture_macos] Test tone is enabled, but output is disabled for stability." << std::endl;
     } else {
         // Disable output when not using test tone
@@ -650,9 +783,8 @@ static OSStatus CreateAndConfigureAudioUnit() {
     }
     
     // 4. Set Stream Format (Match callback expectations: Stereo Float32)
-    // TODO: Make this configurable or detect from device
     AudioStreamBasicDescription streamFormat = {};
-    streamFormat.mSampleRate       = 48000.0; // CHANGED to 48kHz
+    streamFormat.mSampleRate       = 48000.0; // 48kHz
     streamFormat.mFormatID         = kAudioFormatLinearPCM;
     streamFormat.mFormatFlags      = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
     streamFormat.mChannelsPerFrame = 2; // Stereo
@@ -732,6 +864,115 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
         }
     }
     
+    // Check microphone permission - TCC handling
+    if (!CheckMicrophonePermission()) {
+        // Create a promise to handle the async permission request
+        auto deferred = Napi::Promise::Deferred::New(env);
+        
+        // Request permission
+        RequestMicrophonePermission([callback, env, deferred](bool granted) {
+            if (!granted) {
+                // Create detailed error message with instructions for the user
+                std::string errorMsg = "Microphone permission denied. Please enable microphone access in System Preferences > Security & Privacy > Privacy > Microphone";
+                
+                Napi::Object error = Napi::Object::New(env);
+                error.Set("error", Napi::String::New(env, errorMsg));
+                error.Set("type", Napi::String::New(env, "permission_denied"));
+                
+                // Reject the promise with the error
+                deferred.Reject(error);
+                
+                // Also call the callback with the error
+                callback.Call({error});
+                return;
+            }
+            
+            // Permission granted, continue with capture setup
+            Napi::Object result = Napi::Object::New(env);
+            result.Set("success", Napi::Boolean::New(env, true));
+            result.Set("message", Napi::String::New(env, "Permission granted, starting capture"));
+            
+            // Resolve the promise
+            deferred.Resolve(result);
+            
+            // Create ThreadSafeFunction and continue with capture setup
+            // Note: This duplicate logic could be refactored into a separate function
+            g_tsfn = Napi::ThreadSafeFunction::New(
+                env,                               // Environment
+                callback,                          // JS callback
+                "Audio Capture Callback",          // Resource name
+                0,                                 // Max queue size (0 = unlimited)
+                1,                                 // Initial thread count
+                [](Napi::Env) {                    // Finalizer
+                    std::cout << "[audio_capture_macos] ThreadSafeFunction finalized" << std::endl;
+                }
+            );
+            g_tsfn_initialized = true;
+            
+            // Create and configure the audio unit
+            OSStatus status = CreateAndConfigureAudioUnit();
+            if (status != noErr) {
+                g_tsfn.Release(); // Release TSFN on error
+                g_tsfn_initialized = false;
+                
+                Napi::Object error = Napi::Object::New(env);
+                error.Set("error", Napi::String::New(env, "Failed to create audio unit"));
+                error.Set("type", Napi::String::New(env, "audio_unit_error"));
+                error.Set("code", Napi::Number::New(env, status));
+                
+                // Call callback with error
+                callback.Call({error});
+                return;
+            }
+            
+            // Initialize and start audio unit
+            status = AudioUnitInitialize(g_audioUnit);
+            if (status != noErr) {
+                std::cout << "[audio_capture_macos] AudioUnitInitialize failed: " << status << std::endl;
+                g_tsfn.Release(); 
+                g_tsfn_initialized = false;
+                
+                Napi::Object error = Napi::Object::New(env);
+                error.Set("error", Napi::String::New(env, "Failed to initialize audio unit"));
+                error.Set("type", Napi::String::New(env, "audio_unit_error"));
+                error.Set("code", Napi::Number::New(env, status));
+                
+                // Call callback with error
+                callback.Call({error});
+                return;
+            }
+            
+            status = AudioOutputUnitStart(g_audioUnit);
+            if (status != noErr) {
+                std::cout << "[audio_capture_macos] AudioOutputUnitStart failed: " << status << std::endl;
+                AudioUnitUninitialize(g_audioUnit);
+                g_tsfn.Release();
+                g_tsfn_initialized = false;
+                
+                Napi::Object error = Napi::Object::New(env);
+                error.Set("error", Napi::String::New(env, "Failed to start audio unit"));
+                error.Set("type", Napi::String::New(env, "audio_unit_error"));
+                error.Set("code", Napi::Number::New(env, status));
+                
+                // Call callback with error
+                callback.Call({error});
+                return;
+            }
+            
+            g_isCapturing = true;
+            
+            // Call callback with success
+            Napi::Object successObj = Napi::Object::New(env);
+            successObj.Set("success", Napi::Boolean::New(env, true));
+            callback.Call({successObj});
+        });
+        
+        // Return the promise
+        return deferred.Promise();
+    }
+    
+    // Microphone permission already granted, proceed with capture setup
+    
     // Create ThreadSafeFunction for audio data callback
     // This allows us to call JS from the audio thread
     g_tsfn = Napi::ThreadSafeFunction::New(
@@ -751,8 +992,14 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     if (status != noErr) {
         g_tsfn.Release(); // Release TSFN on error
         g_tsfn_initialized = false;
+        
+        Napi::Object error = Napi::Object::New(env);
+        error.Set("error", Napi::String::New(env, "Failed to create audio unit"));
+        error.Set("type", Napi::String::New(env, "audio_unit_error"));
+        error.Set("code", Napi::Number::New(env, status));
+        
         Napi::Error::New(env, "Failed to create audio unit").ThrowAsJavaScriptException();
-        return env.Null();
+        return error;
     }
     
     // Start the audio unit
@@ -761,8 +1008,14 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
         std::cout << "[audio_capture_macos] AudioUnitInitialize failed: " << status << std::endl;
         g_tsfn.Release(); // Release TSFN on error
         g_tsfn_initialized = false;
+        
+        Napi::Object error = Napi::Object::New(env);
+        error.Set("error", Napi::String::New(env, "Failed to initialize audio unit"));
+        error.Set("type", Napi::String::New(env, "audio_unit_error"));
+        error.Set("code", Napi::Number::New(env, status));
+        
         Napi::Error::New(env, "Failed to initialize audio unit").ThrowAsJavaScriptException();
-        return env.Null();
+        return error;
     }
     
     status = AudioOutputUnitStart(g_audioUnit);
@@ -771,8 +1024,14 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
         AudioUnitUninitialize(g_audioUnit);
         g_tsfn.Release(); // Release TSFN on error
         g_tsfn_initialized = false;
+        
+        Napi::Object error = Napi::Object::New(env);
+        error.Set("error", Napi::String::New(env, "Failed to start audio unit"));
+        error.Set("type", Napi::String::New(env, "audio_unit_error"));
+        error.Set("code", Napi::Number::New(env, status));
+        
         Napi::Error::New(env, "Failed to start audio unit").ThrowAsJavaScriptException();
-        return env.Null();
+        return error;
     }
     
     g_isCapturing = true;
@@ -1023,30 +1282,6 @@ Napi::Value TestDeviceFormats(const Napi::CallbackInfo& info) {
     return results;
 }
 
-// Check for BlackHole and print a nice message for the log (Uses ListDevicesInternal)
-void CheckForBlackHole() {
-  // Just log info about BlackHole availability - doesn't change functionality
-  bool foundBlackHole = false;
-  
-  const auto devices = ListDevicesInternal(); // Should be defined now
-  for (const auto& device : devices) {
-    // Check both name and ID for BlackHole
-    if (device.name.find("BlackHole") != std::string::npos || 
-        device.id.find("BlackHole") != std::string::npos) {
-      std::cout << "[audio_capture_macos] ✅ BlackHole virtual audio device detected: " 
-                << device.name << " (" << device.id << ")" << std::endl;
-      foundBlackHole = true;
-      break;
-    }
-  }
-  
-  if (!foundBlackHole) {
-    std::cout << "[audio_capture_macos] ⚠️ BlackHole virtual audio device not detected." << std::endl;
-    std::cout << "[audio_capture_macos] 💡 For reliable system audio capture, install BlackHole:" << std::endl;
-    std::cout << "[audio_capture_macos]    Run: node native-modules/macos/install-blackhole.js" << std::endl;
-  }
-}
-
 // Function to check if the audio queue has data
 Napi::Value HasPendingData(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -1066,9 +1301,6 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set(Napi::String::New(env, "enableTestTone"), Napi::Function::New(env, EnableTestTone));
     exports.Set(Napi::String::New(env, "testDeviceFormats"), Napi::Function::New(env, TestDeviceFormats));
     exports.Set(Napi::String::New(env, "hasPendingData"), Napi::Function::New(env, HasPendingData));
-    
-    // Check for BlackHole at module load time
-    CheckForBlackHole();
     
     // Register cleanup function
     napi_add_env_cleanup_hook(env, [](void* arg) {

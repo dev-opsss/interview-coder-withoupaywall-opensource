@@ -750,88 +750,247 @@ let stopCaptureFunction: (() => Promise<void>) | null = null; // Function to sto
 
 // --- Platform-Specific Audio Capture Functions ---
 
+// Add a global variable to track the native module
+let macAudioModule: any = null;
+
 async function startMacAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
   safeLog('Attempting to start macOS audio capture...');
   
-  // Removed check for 'screen' permission as it's not the correct API call
-  // and actual permission depends on the native capture method used.
-  // The native module integration itself should handle errors due to permissions.
-
-  // --- Integration Point for macOS native module --- 
-  // TODO: Replace placeholder with actual native module integration
-  safeLog("macOS native audio capture not implemented yet.");
-  const intervalId = setInterval(() => {
-      if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
-          clearInterval(intervalId);
-          isCapturingAudio = false; 
-          stopCaptureFunction = null;
-          return;
+  // If we haven't loaded the native module yet, try to load it
+  if (!macAudioModule) {
+    try {
+      // Improved path resolution for native module with multiple fallback paths
+      const possibleModulePaths = [
+        // Production paths
+        path.join(process.resourcesPath, 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
+        
+        // Development paths
+        path.join(__dirname, '..', 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
+        path.join(process.cwd(), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
+        
+        // Additional fallbacks for different directory structures
+        path.join(app.getAppPath(), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
+        path.join(path.dirname(app.getPath('exe')), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node')
+      ];
+      
+      safeLog("Looking for audio_capture_macos.node in these locations:");
+      possibleModulePaths.forEach(p => safeLog(' - ' + p));
+      
+      // Try each path until we find the module
+      for (const candidatePath of possibleModulePaths) {
+        try {
+          if (fs.existsSync(candidatePath)) {
+            safeLog(`Found native module at: ${candidatePath}`);
+            macAudioModule = require(candidatePath);
+            break;
+          }
+        } catch (pathError) {
+          // Continue to the next path
+        }
       }
-      const dummyChunk = new Float32Array(1024).fill(Math.random() * 0.2 - 0.1);
+      
+      if (!macAudioModule) {
+        throw new Error(`Native module not found in any of the expected locations`);
+      }
+      
+      safeLog("Native macOS audio module loaded successfully!");
+    } catch (loadError) {
+      safeError("Failed to load native macOS audio module:", loadError);
+      
+      // Send notification to user about missing module instead of generating dummy data
       if (webContents && !webContents.isDestroyed()) {
-          // Ensure conversion to ArrayBuffer before sending if needed (dummy already is)
-          webContents.send('audio-data-chunk', dummyChunk.buffer);
+        webContents.send('audio-capture-error', {
+          type: 'module_not_found',
+          message: 'Audio capture module could not be loaded. Audio transcription may not work properly.',
+          details: loadError.message || 'Unknown error loading audio module',
+          troubleshooting: [
+            'Try reinstalling the application',
+            'Check if your system supports native modules'
+          ]
+        });
       }
-  }, 250); 
-
-  const stopFnPlaceholder = async () => {
-      safeLog('Stopping macOS placeholder audio capture...');
-      clearInterval(intervalId);
-      stopCaptureFunction = null;
-  };
-  return stopFnPlaceholder;
+      
+      // Return a no-op stop function
+      return async () => {
+        safeLog('No audio capture to stop (module was not loaded)');
+      };
+    }
+  }
+  
+  try {
+    // Get available audio devices
+    const devices = macAudioModule.listDevices();
+    safeLog("Available Audio Devices:");
+    
+    // Look for Microsoft Teams Audio driver
+    let foundTeamsDriver = false;
+    let foundAnyDevice = false;
+    
+    if (Array.isArray(devices) && devices.length > 0) {
+      foundAnyDevice = true;
+      devices.forEach((device: any, index: number) => {
+        safeLog(`  [${index}] ID: ${device.id}, Name: ${device.name}`);
+        if (device.name.includes("Microsoft Teams Audio") || device.id.includes("MSLoopbackDriverDevice_UID")) {
+          foundTeamsDriver = true;
+          safeLog(`Found Microsoft Teams Audio driver: ${device.name}`);
+        }
+      });
+    }
+    
+    if (!foundAnyDevice) {
+      throw new Error("No audio capture devices found");
+    }
+    
+    if (!foundTeamsDriver) {
+      safeLog("Microsoft Teams Audio driver not found. Will use default input device.");
+    }
+    
+    // Create the audio callback function
+    const audioCallback = (audioData: any) => {
+      try {
+        if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
+          return;
+        }
+        
+        // Check if the data is in the expected format
+        if (audioData && audioData.data) {
+          // Send to renderer
+          webContents.send('audio-data-chunk', audioData.data.buffer);
+          
+          // Log occasionally (not every frame to avoid console spam)
+          if (Math.random() < 0.001) {  // Reduced from 0.01 to 0.001 (log ~0.1% of frames)
+            safeLog(`Audio data received: ${audioData.data.length} samples`);
+          }
+        }
+      } catch (callbackError) {
+        safeError("Error in audio callback:", callbackError);
+      }
+    };
+    
+    // Start audio capture with the native module
+    safeLog("Starting audio capture with native module...");
+    const options = {
+      generateTestTone: false // Set to true for testing without actual audio input
+    };
+    
+    const result = macAudioModule.startCapture(audioCallback, options);
+    if (!result) {
+      throw new Error("Failed to start audio capture");
+    }
+    
+    safeLog("Native audio capture started successfully!");
+    
+    // Send success notification to the renderer
+    if (webContents && !webContents.isDestroyed()) {
+      webContents.send('audio-capture-status', {
+        status: 'started',
+        usingTeamsDriver: foundTeamsDriver,
+        message: foundTeamsDriver ? 
+          'Audio capture started using Microsoft Teams driver (system audio)' : 
+          'Audio capture started using microphone'
+      });
+    }
+    
+    // Return the stop function
+    return async () => {
+      safeLog("Stopping native audio capture...");
+      try {
+        macAudioModule.stopCapture();
+        safeLog("Native audio capture stopped successfully");
+        
+        // Notify renderer that capture is stopped
+        if (webContents && !webContents.isDestroyed()) {
+          webContents.send('audio-capture-status', {
+            status: 'stopped',
+            message: 'Audio capture stopped'
+          });
+        }
+      } catch (stopError) {
+        safeError("Error stopping native audio capture:", stopError);
+      }
+    };
+  } catch (startError) {
+    safeError("Error starting native audio capture:", startError);
+    
+    // Check if the error is related to permissions
+    const errorMessage = startError.message || 'Unknown error';
+    const isPermissionError = errorMessage.includes('permission') || 
+                            errorMessage.includes('denied') ||
+                            errorMessage.includes('access');
+    
+    // Send notification to user about the error
+    if (webContents && !webContents.isDestroyed()) {
+      webContents.send('audio-capture-error', {
+        type: isPermissionError ? 'permission_denied' : 'capture_failed',
+        message: isPermissionError ? 
+          'Microphone permission denied. Please check your system privacy settings.' :
+          'Failed to start audio capture.',
+        details: errorMessage,
+        troubleshooting: isPermissionError ? [
+          '1. Open System Settings > Privacy & Security > Microphone',
+          '2. Ensure this application is allowed to access the microphone',
+          '3. Restart the application after granting permission'
+        ] : [
+          'Check if your audio devices are properly connected',
+          'Try installing Microsoft Teams to enable system audio capture',
+          'Restart the application and try again'
+        ]
+      });
+    }
+    
+    // Return a no-op stop function
+    return async () => {
+      safeLog('No audio capture to stop (failed to start)');
+    };
+  }
 }
 
 async function startWindowsAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
    safeLog('Attempting to start Windows audio capture...');
    // --- Integration Point for Windows native module/method --- 
-   // TODO: Replace placeholder
    safeLog("Windows native audio capture not implemented yet.");
-    const intervalId = setInterval(() => {
-        if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
-            clearInterval(intervalId);
-            isCapturingAudio = false;
-            stopCaptureFunction = null;
-            return;
-        }
-        const dummyChunk = new Float32Array(1024).fill(Math.random() * 0.2 - 0.1); 
-        if (webContents && !webContents.isDestroyed()) {
-            webContents.send('audio-data-chunk', dummyChunk.buffer);
-        }
-    }, 250); 
-    const stopFnPlaceholder = async () => { 
-        safeLog('Stopping Windows placeholder audio capture...');
-        clearInterval(intervalId); 
-        stopCaptureFunction = null;
-    }; 
-    // stopCaptureFunction = stopFnPlaceholder;
-    return stopFnPlaceholder;
+   
+   // Send notification to user about missing implementation
+   if (webContents && !webContents.isDestroyed()) {
+     webContents.send('audio-capture-error', {
+       type: 'not_implemented',
+       message: 'Windows audio capture is not yet implemented.',
+       details: 'This feature is coming in a future update.',
+       troubleshooting: [
+         'Use macOS for audio capture features',
+         'Check for application updates'
+       ]
+     });
+   }
+   
+   // Return a no-op stop function
+   return async () => {
+     safeLog('No Windows audio capture to stop (not implemented)');
+   };
 }
 
 async function startLinuxAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
     safeLog('Attempting to start Linux audio capture...');
     // --- Integration Point for Linux ALSA/PulseAudio loopback --- 
-    // TODO: Replace placeholder
     safeLog("Linux native audio capture not implemented yet.");
-    const intervalId = setInterval(() => { 
-        if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
-            clearInterval(intervalId);
-            isCapturingAudio = false;
-            stopCaptureFunction = null;
-            return;
-        }
-        const dummyChunk = new Float32Array(1024).fill(Math.random() * 0.2 - 0.1); 
-         if (webContents && !webContents.isDestroyed()) {
-             webContents.send('audio-data-chunk', dummyChunk.buffer);
-         }
-    }, 250); 
-    const stopFnPlaceholder = async () => { 
-        safeLog('Stopping Linux placeholder audio capture...');
-        clearInterval(intervalId); 
-        stopCaptureFunction = null;
-    }; 
-    // stopCaptureFunction = stopFnPlaceholder;
-    return stopFnPlaceholder;
+    
+    // Send notification to user about missing implementation
+    if (webContents && !webContents.isDestroyed()) {
+      webContents.send('audio-capture-error', {
+        type: 'not_implemented',
+        message: 'Linux audio capture is not yet implemented.',
+        details: 'This feature is coming in a future update.',
+        troubleshooting: [
+          'Use macOS for audio capture features',
+          'Check for application updates'
+        ]
+      });
+    }
+    
+    // Return a no-op stop function
+    return async () => {
+      safeLog('No Linux audio capture to stop (not implemented)');
+    };
 }
 
 
@@ -965,16 +1124,44 @@ async function initializeApp() {
     // --- Test loading and calling the native macOS audio module ---
     if (process.platform === 'darwin') { // Only run on macOS
       try {
-        // Construct path relative to the current file (__dirname in main.ts)
-        // __dirname points to the directory containing the executing JS file (e.g., dist-electron)
-        const basePath = isDev 
-          ? path.resolve(__dirname, '..') // Go up one level from dist-electron to project root in dev
-          : process.resourcesPath; // Production path might still need adjustment
+        // Improved path resolution for native module with multiple fallback paths
+        const possibleModulePaths = [
+          // Production paths
+          path.join(process.resourcesPath, 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
           
-        const modulePath = path.join(basePath, 'native-modules/macos/build/Release/audio_capture_macos.node');
+          // Development paths
+          path.join(__dirname, '..', 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
+          path.join(process.cwd(), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
+          
+          // Additional fallbacks for different directory structures
+          path.join(app.getAppPath(), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
+          path.join(path.dirname(app.getPath('exe')), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node')
+        ];
         
-        safeLog(`Attempting to load native module from: ${modulePath}`);
-        const nativeAudio = require(modulePath);
+        safeLog("Checking these paths for audio_capture_macos.node:");
+        possibleModulePaths.forEach(p => safeLog(' - ' + p));
+        
+        // Try each path until we find the module
+        let nativeAudio = null;
+        let modulePath = '';
+        
+        for (const candidatePath of possibleModulePaths) {
+          try {
+            if (fs.existsSync(candidatePath)) {
+              modulePath = candidatePath;
+              safeLog(`Found native module at: ${modulePath}`);
+              nativeAudio = require(modulePath);
+              break;
+            }
+          } catch (pathError) {
+            // Continue to the next path
+          }
+        }
+        
+        if (!nativeAudio) {
+          throw new Error(`Native module not found in any of the expected locations`);
+        }
+        
         safeLog("Native macOS module loaded successfully.");
 
         // --- Test Device Listing ---
@@ -984,16 +1171,14 @@ async function initializeApp() {
         if (Array.isArray(devices)) {
             devices.forEach((device, index) => {
                 safeLog(`  [${index}] ID: ${device.id}, Name: ${device.name}`);
-                // ----> CHOOSE YOUR TARGET DEVICE HERE <---- 
-                // Example: Use Microsoft Teams Audio if found, otherwise default to first device
-                if (device.name === "Microsoft Teams Audio") {
+                // Prioritize Microsoft Teams Audio driver if available
+                if (device.name.includes("Microsoft Teams Audio") || device.id.includes("MSLoopbackDriverDevice_UID")) {
                     targetDeviceUID = device.id;
+                    safeLog(`Found Microsoft Teams Audio driver: ${device.name}`);
                 } else if (!targetDeviceUID && index === 0) {
-                    // Fallback to the first device if specific one not found
-                    // targetDeviceUID = device.id; // Uncomment to fallback
-                } 
-                // Or uncomment below to hardcode an ID if needed:
-                // targetDeviceUID = "MSLoopbackDriverDevice_UID"; 
+                    // Fallback to the first device if Teams driver not found
+                    targetDeviceUID = device.id;
+                }
             });
         } else {
             safeLog(devices); // Log as is if not an array
@@ -1006,17 +1191,22 @@ async function initializeApp() {
         } else {
             safeLog(`Selected Target Device UID for capture: ${targetDeviceUID}`);
             
-            const dummyDataCallback = (audioChunk: ArrayBuffer) => {
+            const dummyDataCallback = (audioChunk: any) => {
                 try {
                     // Later: This will receive ArrayBuffer data from the native side
                     // For now, it might not be called until ThreadSafeFunction is set up
-                    safeLog("JavaScript dummyDataCallback received chunk (size: " + audioChunk.byteLength + ")");
+                    if (Math.random() < 0.001) { // Add throttling to reduce log frequency
+                        safeLog("JavaScript dummyDataCallback received chunk " + 
+                              (audioChunk.data ? `(size: ${audioChunk.data.length} samples)` : "(no data)"));
+                    }
 
                     // --- Add any actual processing logic here within the try block ---
-                    // Example: Convert to Float32Array
-                    // const floatArray = new Float32Array(audioChunk);
-                    // Send to renderer, etc.
-                    // getMainWindow()?.webContents.send('audio-data', floatArray); // Example
+                    // Example: Access Float32Array data
+                    if (audioChunk && audioChunk.data) {
+                        const floatArray = audioChunk.data;
+                        // Send to renderer if needed
+                        // getMainWindow()?.webContents.send('audio-data', floatArray); // Example
+                    }
                     // -------------------------------------------------------------
 
                 } catch (jsError) {
@@ -1026,7 +1216,9 @@ async function initializeApp() {
             
             try {
                 safeLog("Attempting to start capture...");
-                const startSuccess = nativeAudio.startCapture(targetDeviceUID, dummyDataCallback);
+                const options = { generateTestTone: false }; // Set to true for testing without actual audio input
+                const startSuccess = nativeAudio.startCapture(dummyDataCallback, options);
+                
                 if (startSuccess) {
                     safeLog("nativeAudio.startCapture call succeeded. Capture should be active.");
 
@@ -1034,12 +1226,8 @@ async function initializeApp() {
                     setTimeout(() => {
                         try {
                             safeLog("Attempting to stop capture...");
-                            const stopSuccess = nativeAudio.stopCapture();
-                            if (stopSuccess) {
-                                safeLog("nativeAudio.stopCapture call succeeded.");
-                            } else {
-                                safeLog("nativeAudio.stopCapture call returned false (or threw).");
-                            }
+                            nativeAudio.stopCapture();
+                            safeLog("nativeAudio.stopCapture call succeeded.");
                         } catch (stopError) {
                              safeError("Error calling nativeAudio.stopCapture:", stopError);
                         }

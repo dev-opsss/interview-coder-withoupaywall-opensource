@@ -30,6 +30,9 @@ echo "Removing old build files to ensure a fresh start..."
 rm -rf dist dist-electron
 rm -f .env
 
+echo "=== Rebuilding native modules... ==="
+npm run rebuild:native
+
 echo "=== Step 3: Building application... ==="
 echo "This may take a moment..."
 npm run clean && npm run build
