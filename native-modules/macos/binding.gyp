@@ -2,7 +2,7 @@
   "targets": [
     {
       "target_name": "audio_capture_macos",
-      "sources": [ "audio_capture_macos.cc" ],
+      "sources": [ "audio_capture_macos.mm" ],
       "conditions": [
         ['OS=="mac"', {
           "xcode_settings": {
@@ -15,7 +15,14 @@
           "dependencies": [],
           "link_settings": {
             "libraries": [], # No specific libraries needed for base setup
-            "frameworks": [ "CoreAudio.framework", "AudioToolbox.framework" ] # Add CoreAudio frameworks
+            "frameworks": [ 
+              "CoreAudio.framework", 
+              "AudioToolbox.framework",
+              "Foundation.framework",
+              "AVFoundation.framework",
+              "CoreMedia.framework",
+              "ScreenCaptureKit.framework"
+            ] # Added required frameworks for .mm implementation
           }
         }]
       ],
