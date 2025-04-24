@@ -7,27 +7,17 @@ DEFS_Debug := \
 	'-DUSING_UV_SHARED=1' \
 	'-DUSING_V8_SHARED=1' \
 	'-DV8_DEPRECATION_WARNINGS=1' \
-	'-DV8_DEPRECATION_WARNINGS' \
-	'-DV8_IMMINENT_DEPRECATION_WARNINGS' \
 	'-D_GLIBCXX_USE_CXX11_ABI=1' \
-	'-DELECTRON_ENSURE_CONFIG_GYPI' \
 	'-D_DARWIN_USE_64_BIT_INODE=1' \
 	'-D_LARGEFILE_SOURCE' \
 	'-D_FILE_OFFSET_BITS=64' \
-	'-DUSING_ELECTRON_CONFIG_GYPI' \
-	'-DV8_COMPRESS_POINTERS' \
-	'-DV8_COMPRESS_POINTERS_IN_SHARED_CAGE' \
-	'-DV8_ENABLE_SANDBOX' \
-	'-DV8_31BIT_SMIS_ON_64BIT_ARCH' \
 	'-DOPENSSL_NO_PINSHARED' \
 	'-DOPENSSL_THREADS' \
-	'-DOPENSSL_NO_ASM' \
 	'-DNAPI_VERSION=8' \
 	'-DNAPI_DISABLE_CPP_EXCEPTIONS' \
 	'-DBUILDING_NODE_EXTENSION' \
 	'-DDEBUG' \
-	'-D_DEBUG' \
-	'-DV8_ENABLE_CHECKS'
+	'-D_DEBUG'
 
 # Flags passed to all source files.
 CFLAGS_Debug := \
@@ -61,13 +51,13 @@ CFLAGS_OBJC_Debug :=
 CFLAGS_OBJCC_Debug :=
 
 INCS_Debug := \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/include/node \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/src \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/openssl/config \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/openssl/openssl/include \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/uv/include \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/zlib \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/v8/include \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/include/node \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/src \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/openssl/config \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/openssl/openssl/include \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/uv/include \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/zlib \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/v8/include \
 	-I$(srcdir)/../../node_modules/node-addon-api
 
 DEFS_Release := \
@@ -75,21 +65,12 @@ DEFS_Release := \
 	'-DUSING_UV_SHARED=1' \
 	'-DUSING_V8_SHARED=1' \
 	'-DV8_DEPRECATION_WARNINGS=1' \
-	'-DV8_DEPRECATION_WARNINGS' \
-	'-DV8_IMMINENT_DEPRECATION_WARNINGS' \
 	'-D_GLIBCXX_USE_CXX11_ABI=1' \
-	'-DELECTRON_ENSURE_CONFIG_GYPI' \
 	'-D_DARWIN_USE_64_BIT_INODE=1' \
 	'-D_LARGEFILE_SOURCE' \
 	'-D_FILE_OFFSET_BITS=64' \
-	'-DUSING_ELECTRON_CONFIG_GYPI' \
-	'-DV8_COMPRESS_POINTERS' \
-	'-DV8_COMPRESS_POINTERS_IN_SHARED_CAGE' \
-	'-DV8_ENABLE_SANDBOX' \
-	'-DV8_31BIT_SMIS_ON_64BIT_ARCH' \
 	'-DOPENSSL_NO_PINSHARED' \
 	'-DOPENSSL_THREADS' \
-	'-DOPENSSL_NO_ASM' \
 	'-DNAPI_VERSION=8' \
 	'-DNAPI_DISABLE_CPP_EXCEPTIONS' \
 	'-DBUILDING_NODE_EXTENSION'
@@ -126,13 +107,13 @@ CFLAGS_OBJC_Release :=
 CFLAGS_OBJCC_Release :=
 
 INCS_Release := \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/include/node \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/src \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/openssl/config \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/openssl/openssl/include \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/uv/include \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/zlib \
-	-I/Users/m_891815/Library/Caches/node-gyp/29.1.4/deps/v8/include \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/include/node \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/src \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/openssl/config \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/openssl/openssl/include \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/uv/include \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/zlib \
+	-I/Users/m_891815/Library/Caches/node-gyp/20.19.1/deps/v8/include \
 	-I$(srcdir)/../../node_modules/node-addon-api
 
 OBJS := \
@@ -151,16 +132,16 @@ $(OBJS): GYP_OBJCXXFLAGS := $(DEFS_$(BUILDTYPE)) $(INCS_$(BUILDTYPE))  $(CFLAGS_
 
 # Suffix rules, putting all outputs into $(obj).
 
-$(obj).$(TOOLSET)/$(TARGET)/%.o: $(srcdir)/%.cc FORCE_DO_CMD
-	@$(call do_cmd,cxx,1)
+$(obj).$(TOOLSET)/$(TARGET)/%.o: $(srcdir)/%.mm FORCE_DO_CMD
+	@$(call do_cmd,objcxx,1)
 
 # Try building from generated source, too.
 
-$(obj).$(TOOLSET)/$(TARGET)/%.o: $(obj).$(TOOLSET)/%.cc FORCE_DO_CMD
-	@$(call do_cmd,cxx,1)
+$(obj).$(TOOLSET)/$(TARGET)/%.o: $(obj).$(TOOLSET)/%.mm FORCE_DO_CMD
+	@$(call do_cmd,objcxx,1)
 
-$(obj).$(TOOLSET)/$(TARGET)/%.o: $(obj)/%.cc FORCE_DO_CMD
-	@$(call do_cmd,cxx,1)
+$(obj).$(TOOLSET)/$(TARGET)/%.o: $(obj)/%.mm FORCE_DO_CMD
+	@$(call do_cmd,objcxx,1)
 
 # End of this set of suffix rules
 ### Rules for final target.
