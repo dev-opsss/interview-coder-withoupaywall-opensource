@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client"
 import { useToast } from "../../contexts/toast"
 import { LanguageSelector } from "../shared/LanguageSelector"
 import { COMMAND_KEY } from "../../utils/platform"
+import VoiceButton from "./VoiceButton"
+import AIChatButton from "./AIChatButton"
 
 interface QueueCommandsProps {
   onTooltipVisibilityChange: (visible: boolean, height: number) => void
@@ -27,8 +29,29 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   onToggleChat = () => {}
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
+  const [isAIChatActive, setIsAIChatActive] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
   const { showToast } = useToast()
+
+  // Track voice input status changes from parent component
+  useEffect(() => {
+    // Listen for toggle-voice-input events from the main process
+    const removeListener = window.electronAPI.onToggleVoiceInput(() => {
+      // This is fired when the keyboard shortcut is used
+      onToggleVoice();
+    });
+
+    return () => {
+      // Clean up listener when component unmounts
+      removeListener();
+    };
+  }, [onToggleVoice]);
+
+  // Handle AI Chat toggle
+  const handleToggleChat = () => {
+    setIsAIChatActive(prev => !prev);
+    onToggleChat();
+  };
 
   // Extract the repeated language selection logic into a separate function
   const extractLanguagesAndUpdate = (direction?: 'next' | 'prev') => {
@@ -203,50 +226,11 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           {/* Separator */}
           <div className="mx-2 h-4 w-px bg-white/20" />
 
-          {/* Add Voice Button */}
-          <div
-            className={`flex items-center cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors ${
-              isMicActive ? 'text-red-400' : ''
-            }`}
-            onClick={onToggleVoice}
-            title={isMicActive ? "Stop voice input" : "Start voice input"}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="w-3.5 h-3.5"
-            >
-              <path d="M12 15C13.66 15 15 13.66 15 12V6C15 4.34 13.66 3 12 3C10.34 3 9 4.34 9 6V12C9 13.66 10.34 15 12 15Z" />
-              <path d="M17 12C17 14.76 14.76 17 12 17C9.24 17 7 14.76 7 12H5C5 15.53 7.61 18.43 11 18.92V22H13V18.92C16.39 18.43 19 15.53 19 12H17Z" />
-            </svg>
-            <span className="text-[11px] leading-none ml-1.5">Voice</span>
-          </div>
+          {/* Voice Button Component */}
+          <VoiceButton isActive={isMicActive} onToggle={onToggleVoice} />
           
-          {/* Add AI Chat Button */}
-          <div
-            className="flex items-center cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors"
-            onClick={onToggleChat}
-            title="Open AI chat assistant"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="w-3.5 h-3.5 text-indigo-400"
-            >
-              <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
-            </svg>
-            <span className="text-[11px] leading-none ml-1.5">AI Chat</span>
-          </div>
+          {/* AI Chat Button Component */}
+          <AIChatButton isActive={isAIChatActive} onToggle={handleToggleChat} />
           
           {/* Separator */}
           <div className="mx-2 h-4 w-px bg-white/20" />
