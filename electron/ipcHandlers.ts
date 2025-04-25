@@ -591,4 +591,8 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       };
     }
   });
+
+  ipcMain.handle('getOpenAIApiKey', async () => {
+    return configHelper.getOpenAIApiKey();
+  });
 }

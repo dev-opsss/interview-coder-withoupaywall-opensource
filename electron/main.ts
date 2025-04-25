@@ -1062,6 +1062,83 @@ ipcMain.handle('stop-audio-capture', async (event) => {
   return { success: true, message: 'Capture stop request processed.' };
 });
 
+async function getConfig() {
+  try {
+    const userDataPath = app.getPath("userData")
+    const configPath = path.join(userDataPath, "config.json")
+    
+    if (fs.existsSync(configPath)) {
+      const configData = await fs.promises.readFile(configPath, "utf8")
+      return JSON.parse(configData)
+    } else {
+      // Create default config
+      const defaultConfig = { apiKey: "", model: "gpt-4" }
+      await fs.promises.writeFile(
+        configPath,
+        JSON.stringify(defaultConfig, null, 2),
+        "utf8"
+      )
+      return defaultConfig
+    }
+  } catch (error) {
+    console.error("Error loading config:", error)
+    return { apiKey: "", model: "gpt-4" }
+  }
+}
+
+// Add saveConfig function
+async function saveConfig(config: Config) {
+  try {
+    const userDataPath = app.getPath("userData")
+    const configPath = path.join(userDataPath, "config.json")
+    await fs.promises.writeFile(
+      configPath,
+      JSON.stringify(config, null, 2),
+      "utf8"
+    )
+    return true
+  } catch (error) {
+    console.error("Error saving config:", error)
+    return false
+  }
+}
+
+// Update Config interface (add before getConfig if it exists, otherwise add it here)
+interface Config {
+  apiKey?: string;
+  model?: string;
+  language?: string;
+  opacity?: number;
+  googleSpeechApiKey?: string;
+  speechService?: string;
+  // Add any other existing properties here
+}
+
+// Add the handlers for Google Speech API
+ipcMain.handle('getGoogleSpeechApiKey', async () => {
+  const config = await getConfig();
+  return config.googleSpeechApiKey || null;
+});
+
+ipcMain.handle('saveGoogleSpeechApiKey', async (_, apiKey) => {
+  const config = await getConfig();
+  config.googleSpeechApiKey = apiKey;
+  await saveConfig(config);
+  return true;
+});
+
+ipcMain.handle('getSpeechService', async () => {
+  const config = await getConfig();
+  return config.speechService || 'whisper';
+});
+
+ipcMain.handle('saveSpeechService', async (_, service) => {
+  const config = await getConfig();
+  config.speechService = service;
+  await saveConfig(config);
+  return true;
+});
+
 // Initialize application
 async function initializeApp() {
   try {

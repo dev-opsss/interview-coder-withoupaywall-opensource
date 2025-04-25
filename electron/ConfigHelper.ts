@@ -314,7 +314,7 @@ export class ConfigHelper extends EventEmitter {
    */
   public getLanguage(): string {
     const config = this.loadConfig();
-    return config.language || "python";
+    return config.language || this.defaultConfig.language;
   }
 
   /**
@@ -432,6 +432,18 @@ export class ConfigHelper extends EventEmitter {
       
       return { valid: false, error: errorMessage };
     }
+  }
+
+  /**
+   * Specially get OpenAI API key - only returns the API key if the provider is OpenAI
+   */
+  public getOpenAIApiKey(): string {
+    const config = this.loadConfig();
+    // Only return the API key if the provider is OpenAI or if key starts with "sk-" (OpenAI format)
+    if (config.apiProvider === "openai" || (config.apiKey && config.apiKey.startsWith('sk-') && !config.apiKey.startsWith('sk-ant-'))) {
+      return config.apiKey;
+    }
+    return ""; // Return empty string if not OpenAI
   }
 }
 
