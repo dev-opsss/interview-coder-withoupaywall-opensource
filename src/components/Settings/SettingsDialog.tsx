@@ -186,6 +186,8 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
   const [isLoading, setIsLoading] = useState(false);
   const { showToast } = useToast();
+  const [googleApiKey, setGoogleApiKey] = useState('');
+  const [speechService, setSpeechService] = useState('whisper');
 
   // Sync with external open state
   useEffect(() => {
@@ -291,6 +293,36 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   // Open external link handler
   const openExternalLink = (url: string) => {
     window.electronAPI.openLink(url);
+  };
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      setIsLoading(true);
+      try {
+        const apiKey = await window.electronAPI.getGoogleSpeechApiKey() || '';
+        const service = await window.electronAPI.getSpeechService() || 'whisper';
+        
+        setGoogleApiKey(apiKey);
+        setSpeechService(service);
+      } catch (error) {
+        console.error('Failed to load speech settings:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadSettings();
+  }, []);
+
+  const handleSaveSpeechSettings = async () => {
+    try {
+      await window.electronAPI.saveGoogleSpeechApiKey(googleApiKey);
+      await window.electronAPI.saveSpeechService(speechService);
+      showToast('Success', 'Speech settings saved', 'success');
+    } catch (error) {
+      console.error('Failed to save speech settings:', error);
+      showToast('Error', 'Failed to save speech settings', 'error');
+    }
   };
 
   return (
@@ -562,6 +594,55 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 </div>
               );
             })}
+          </div>
+        </div>
+        <div className="space-y-4 pt-4 border-t">
+          <h3 className="text-lg font-medium">Speech-to-Text Settings</h3>
+          
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Speech Service
+              </label>
+              <select
+                className="w-full p-2 border rounded-md bg-white dark:bg-gray-800"
+                value={speechService}
+                onChange={(e) => setSpeechService(e.target.value)}
+                disabled={isLoading}
+              >
+                <option value="whisper">OpenAI Whisper</option>
+                <option value="google">Google Cloud Speech-to-Text</option>
+              </select>
+            </div>
+            
+            {speechService === 'google' && (
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Google Cloud Speech-to-Text API Key
+                </label>
+                <input
+                  type="password"
+                  placeholder="Enter your Google Cloud API Key"
+                  className="w-full p-2 border rounded-md bg-white dark:bg-gray-800"
+                  value={googleApiKey}
+                  onChange={(e) => setGoogleApiKey(e.target.value)}
+                  disabled={isLoading}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  This API key must have access to the Speech-to-Text API in your Google Cloud project.
+                </p>
+              </div>
+            )}
+          </div>
+          
+          <div className="flex justify-end">
+            <button
+              onClick={handleSaveSpeechSettings}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+              disabled={isLoading}
+            >
+              Save Speech Settings
+            </button>
           </div>
         </div>
         <DialogFooter className="flex justify-between sm:justify-between">

@@ -441,6 +441,13 @@ const electronAPI = {
       ipcRenderer.removeListener('audio-capture-status', subscription);
     };
   },
+
+  getOpenAIApiKey: () => ipcRenderer.invoke('getOpenAIApiKey'),
+
+  getGoogleSpeechApiKey: () => ipcRenderer.invoke('getGoogleSpeechApiKey'),
+  saveGoogleSpeechApiKey: (apiKey: string) => ipcRenderer.invoke('saveGoogleSpeechApiKey', apiKey),
+  getSpeechService: () => ipcRenderer.invoke('getSpeechService'),
+  saveSpeechService: (service: 'whisper' | 'google') => ipcRenderer.invoke('saveSpeechService', service),
 }
 
 // Before exposing the API

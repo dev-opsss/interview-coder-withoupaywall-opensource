@@ -61,6 +61,11 @@ export interface ElectronAPI {
   openLink: (url: string) => void
   onApiKeyInvalid: (callback: () => void) => () => void
   removeListener: (eventName: string, callback: (...args: any[]) => void) => void
+
+  getGoogleSpeechApiKey: () => Promise<string | null>
+  saveGoogleSpeechApiKey: (apiKey: string) => Promise<boolean>
+  getSpeechService: () => Promise<string>
+  saveSpeechService: (service: string) => Promise<boolean>
 }
 
 declare global {

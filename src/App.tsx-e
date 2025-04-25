@@ -15,7 +15,6 @@ import {
 import { ToastContext } from "./contexts/toast"
 import { WelcomeScreen } from "./components/WelcomeScreen"
 import { SettingsDialog } from "./components/Settings/SettingsDialog"
-import { GoogleSpeechService } from './services/googleSpeechService'
 
 // Create a React Query client
 const queryClient = new QueryClient({
@@ -31,15 +30,6 @@ const queryClient = new QueryClient({
     }
   }
 })
-
-// Helper function to mask API key for secure logging
-const maskApiKey = (apiKey: string): string => {
-  if (!apiKey) return '[NONE]';
-  if (apiKey.length <= 8) return '****' + apiKey.slice(-4);
-  
-  // Show first 4 and last 4 characters, mask the rest
-  return apiKey.slice(0, 4) + '****' + apiKey.slice(-4);
-};
 
 // Root component that provides the QueryClient
 function App() {
@@ -67,10 +57,6 @@ function App() {
   const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   const audioChunksRef = useRef<Blob[]>([]);
 
-  // Speech service state
-  const [speechService, setSpeechService] = useState<'whisper' | 'google'>('whisper');
-  const googleSpeechRef = useRef<GoogleSpeechService | null>(null);
-
   // Show toast method
   const showToast = useCallback(
     (
@@ -93,17 +79,11 @@ function App() {
     try {
       console.log("Starting recording...");
       
-      // Make sure API keys are available
-      if (speechService === 'whisper') {
-        const apiKey = await window.electronAPI.getOpenAIApiKey();
-        if (!apiKey) {
-          console.error("OpenAI API key not found");
-          showToast("API Key Missing", "OpenAI API key is not configured", "error");
-          return;
-        }
-      } else if (speechService === 'google' && (!googleSpeechRef.current || !await window.electronAPI.getGoogleSpeechApiKey())) {
-        console.error("Google Speech API key not found");
-        showToast("API Key Missing", "Google Speech API key is not configured", "error");
+      // Fetch OpenAI API key
+      const apiKey = await window.electronAPI.getOpenAIApiKey();
+      if (!apiKey) {
+        console.error("OpenAI API key not found");
+        showToast("API Key Missing", "OpenAI API key is not configured", "error");
         return;
       }
       
@@ -116,6 +96,56 @@ function App() {
       setMediaRecorder(recorder);
       audioChunksRef.current = [];
       
+      // Initialize state for showing partial results
+      let transcriptionInProgress = false;
+      let processingInterval: ReturnType<typeof setInterval> | null = null;
+      let lastProcessedChunkIndex = -1;
+      
+      // Start a processing loop that sends chunks for transcription every few seconds
+      processingInterval = setInterval(async () => {
+        if (transcriptionInProgress || audioChunksRef.current.length <= lastProcessedChunkIndex + 1) {
+          return; // Skip if already processing or no new chunks
+        }
+        
+        const chunksToProcess = audioChunksRef.current.slice(0, lastProcessedChunkIndex + 4); // Process up to 4 chunks
+        
+        if (chunksToProcess.length > 0) {
+          transcriptionInProgress = true;
+          
+          try {
+            // Show processing indicator
+            showToast("Processing", "Transcribing speech...", "neutral");
+            
+            // Create a temporary blob for this batch
+            const audioBlob = new Blob(chunksToProcess, { type: mimeType });
+            
+            // Process the partial audio
+            const result = await processPartialAudio(audioBlob, apiKey);
+            
+            if (result && result.text) {
+              // Update chat input with transcription in progress
+              setChatInputValue(prev => {
+                // If starting new transcription, add placeholder
+                if (!prev.includes("[Transcribing...]")) {
+                  return `${prev}[Transcribing...] ${result.text}`;
+                }
+                
+                // Otherwise update the existing placeholder
+                const baseText = prev.replace(/\[Transcribing...\] .*$/, '');
+                return `${baseText}[Transcribing...] ${result.text}`;
+              });
+            }
+            
+            // Update the last processed chunk index
+            lastProcessedChunkIndex = chunksToProcess.length - 1;
+          } catch (error) {
+            console.error("Error processing partial audio:", error);
+          } finally {
+            transcriptionInProgress = false;
+          }
+        }
+      }, 3000); // Process every 3 seconds
+      
       // Collect audio chunks
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
@@ -123,65 +153,49 @@ function App() {
         }
       };
       
-      // Set up event handlers
+      // Set up event handlers with enhanced logging
       recorder.onstart = () => {
         console.log("MediaRecorder started, state:", recorder.state);
-        showToast('Recording', 'Listening... Click the mic button again to stop', 'success');
+        // Initialize the chat input with a placeholder for transcription
+        setChatInputValue(prev => `${prev}[Transcribing...] `);
       };
       
       recorder.onerror = (e) => {
         console.error("MediaRecorder error:", e);
+        if (processingInterval) {
+          clearInterval(processingInterval);
+        }
       };
       
-      // Process audio when recording stops
-      recorder.onstop = async () => {
+      // Process final audio when recording stops
+      recorder.onstop = () => {
         console.log("MediaRecorder stopped");
         
+        // Clear the processing interval
+        if (processingInterval) {
+          clearInterval(processingInterval);
+        }
+        
         if (audioChunksRef.current.length > 0) {
-          try {
-            // Create a blob from all audio chunks
-            const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-            console.log(`Created audio blob: size=${audioBlob.size} bytes, type=${audioBlob.type}`);
-            
-            // Show transcribing toast
-            showToast("Transcribing", "Converting your speech to text...", "neutral");
-            
-            let transcriptionText = '';
-            
-            // Use appropriate service
-            if (speechService === 'google' && googleSpeechRef.current) {
-              // Use Google Speech-to-Text
-              transcriptionText = await googleSpeechRef.current.transcribeAudio(audioBlob);
-            } else {
-              // Fall back to Whisper
-              const result = await processAudioWithWhisper(audioChunksRef.current);
-              transcriptionText = result?.text || '';
-            }
-            
-            if (transcriptionText) {
-              // Update chat input with transcription
-              setChatInputValue(prev => prev + (prev ? ' ' : '') + transcriptionText);
-              showToast("Transcription Complete", "Your speech has been converted to text", "success");
-            } else {
-              throw new Error("No transcription returned");
-            }
-          } catch (error) {
-            console.error("Error in audio processing:", error);
-            showToast("Transcription Failed", error instanceof Error ? error.message : "Failed to transcribe audio", "error");
-          }
+          console.log("Processing complete audio with Whisper API");
+          // Clean up the transcribing placeholder
+          setChatInputValue(prev => prev.replace(/\[Transcribing...\] .*$/, ''));
+          // Process the full audio for final result
+          processAudioWithWhisper(audioChunksRef.current);
         }
       };
       
       // Start recording
       recorder.start(1000); // Record in chunks of 1 second
       setIsRecording(true);
-      
+      showToast('Recording', 'Listening... Click the mic button again to stop', 'success');
+
     } catch (error: unknown) {
       console.error('Recording error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to access microphone';
       showToast('Microphone Error', errorMessage, 'error');
     }
-  }, [showToast, speechService]);
+  }, [showToast]);
   
   // Helper function to process partial audio chunks during recording
   const processPartialAudio = async (audioBlob: Blob, apiKey: string) => {
@@ -448,7 +462,7 @@ function App() {
   };
 
   // Function to process audio with Whisper REST API
-  const processAudioWithWhisper = async (audioChunks: Blob[]): Promise<{ text: string } | undefined> => {
+  const processAudioWithWhisper = async (audioChunks: Blob[]) => {
     try {
       // Create a blob from all audio chunks
       const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
@@ -459,12 +473,8 @@ function App() {
       if (!apiKey) {
         console.error("OpenAI API key not found");
         showToast("API Key Missing", "OpenAI API key is not configured", "error");
-        return undefined;
+        return;
       }
-
-      // Log that we're using Whisper API with a masked version of the key
-      const maskedKey = maskApiKey(apiKey);
-      console.log(`Using OpenAI Whisper API for transcription with key: ${maskedKey}`);
 
       // Create FormData and append the file
       const formData = new FormData();
@@ -475,8 +485,6 @@ function App() {
 
       // Show transcribing toast
       showToast("Transcribing", "Converting your speech to text...", "neutral");
-
-      console.log(`Sending audio to Whisper API (audio size: ${Math.round(audioBlob.size/1024)} KB)`);
 
       // Make request to Whisper API
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -499,53 +507,14 @@ function App() {
         // Update chat input with transcription
         setChatInputValue(prev => prev + (prev ? ' ' : '') + data.text);
         showToast("Transcription Complete", "Your speech has been converted to text", "success");
-        
-        // Return the transcription result
-        return { text: data.text };
       } else {
         throw new Error("No transcription returned");
       }
     } catch (error) {
       console.error("Error in Whisper API processing:", error);
       showToast("Transcription Failed", error instanceof Error ? error.message : "Failed to transcribe audio", "error");
-      return undefined;
     }
   };
-
-  // Load speech service preference
-  useEffect(() => {
-    const loadSpeechService = async () => {
-      try {
-        // Initialize Google Speech service
-        if (!googleSpeechRef.current) {
-          googleSpeechRef.current = new GoogleSpeechService();
-        }
-        
-        // Load selected speech service
-        const service = await window.electronAPI.getSpeechService() || 'whisper';
-        setSpeechService(service as 'whisper' | 'google');
-        
-        // If Google is selected, load API key
-        if (service === 'google') {
-          const apiKey = await window.electronAPI.getGoogleSpeechApiKey();
-          if (apiKey && googleSpeechRef.current) {
-            googleSpeechRef.current.setApiKey(apiKey);
-          } else {
-            // Fall back to whisper if no API key
-            setSpeechService('whisper');
-            showToast('Warning', 'Google Speech API key not found, using Whisper instead', 'neutral');
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load speech service:', error);
-        setSpeechService('whisper'); // Fall back to whisper
-      }
-    };
-    
-    if (isInitialized) {
-      loadSpeechService();
-    }
-  }, [isInitialized, showToast]);
 
   return (
     <QueryClientProvider client={queryClient}>
