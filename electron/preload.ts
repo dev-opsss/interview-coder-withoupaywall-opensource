@@ -311,7 +311,16 @@ const electronAPI = {
         'start-update', 'install-update', 'decrement-credits', 'get-config',
         'update-config', 'check-api-key', 'validate-api-key', 'openExternal',
         'delete-last-screenshot', 'toggle-voice-input', 'show-input-dialog', 
-        'handle-ai-query'
+        'handle-ai-query',
+        'get-ai-settings', 
+        'save-ai-settings',
+        'getOpenAIApiKey', 
+        'getGoogleSpeechApiKey',
+        'saveGoogleSpeechApiKey',
+        'getSpeechService',
+        'saveSpeechService',
+        'handle-resume-upload',
+        'transcribe-audio'
       ];
       if (!allowedInvokeChannels.includes(channel)) {
           safeLog(`Preload ERROR: Denied invoke call to untrusted channel: ${channel}`);
@@ -449,7 +458,13 @@ const electronAPI = {
   getSpeechService: () => ipcRenderer.invoke('getSpeechService'),
   saveSpeechService: (service: 'whisper' | 'google') => ipcRenderer.invoke('saveSpeechService', service),
 
-  uploadResume: (filePath: string) => ipcRenderer.invoke('handle-resume-upload', filePath),
+  // uploadResume: (filePath: string) => ipcRenderer.invoke('handle-resume-upload', filePath), // Remove/comment old one
+  // Add new handlers
+  extractResumeText: (filePath: string) => ipcRenderer.invoke('extract-resume-text', filePath),
+  getAiSettings: () => ipcRenderer.invoke('get-ai-settings'),
+  // Allow partial settings object for saving
+  saveAiSettings: (settings: Partial<{ personality: string; interviewStage: string; userPreferences: string }>) => 
+    ipcRenderer.invoke('save-ai-settings', settings),
 }
 
 // Before exposing the API
@@ -480,3 +495,61 @@ contextBridge.exposeInMainWorld("electronUtils", {
     ipcRenderer.removeListener(channel, listener)
   }
 })
+
+declare global {
+  interface Window {
+    electron: {
+      // ... existing electron properties ...
+      getPlatform: () => NodeJS.Platform;
+      getConfig: () => Promise<any>; // Consider defining a specific config type
+      updateConfig: (config: { apiKey?: string; model?: string; language?: string; opacity?: number }) => Promise<void>;
+      onShowSettings: (callback: () => void) => () => void;
+      checkApiKey: () => Promise<boolean>;
+      validateApiKey: (apiKey: string) => Promise<boolean>;
+      openExternal: (url: string) => Promise<void>;
+      onApiKeyInvalid: (callback: () => void) => () => void;
+      removeListener: (eventName: string, callback: (...args: any[]) => void) => void;
+      removeAllListeners: (eventName: string) => void;
+      // ... other existing methods ...
+
+      // Transcription / Assistant related
+      toggleVoiceInput: () => Promise<boolean>;
+      startAudioCapture: () => Promise<void>;
+      stopAudioCapture: () => Promise<void>;
+      transcribeAudio: (audioData: { buffer: ArrayBuffer; type: string }) => Promise<string | null>;
+      handleAiQuery: (args: { query: string; language?: string }) => Promise<string | null>;
+      handleResumeUpload: (filePath: string) => Promise<string | null>;
+      getGoogleSpeechApiKey: () => Promise<string | null>;
+      saveGoogleSpeechApiKey: (apiKey: string) => Promise<void>;
+      getSpeechService: () => Promise<'whisper' | 'google' | null>;
+      saveSpeechService: (service: 'whisper' | 'google') => Promise<void>;
+
+      // ---> Updated AI Settings Types <-----
+      getAiSettings: () => Promise<{ 
+        personality: string; 
+        interviewStage: string; 
+        userPreferences: string; 
+      }>; // No longer null
+      saveAiSettings: (settings: { 
+        personality?: string; // Allow partial updates
+        interviewStage?: string; 
+        userPreferences?: string; 
+      }) => Promise<void>; 
+      // ---> END Updated Types <----------
+      
+      // ---> Add Resume Text Extraction Type <-----
+      extractResumeText: (filePath: string) => Promise<string | null>;
+      // ---> END Add Type <-------------------------
+
+      onTranscriptionReceived: (callback: (text: string) => void) => () => void;
+      onTranscriptionError: (callback: (error: any) => void) => () => void;
+      // ... potentially other methods ...
+      ipcRenderer: {
+        invoke(channel: string, ...args: any[]): Promise<any>;
+        on(channel: string, listener: (event: Electron.IpcRendererEvent, ...args: any[]) => void): Electron.IpcRenderer;
+        removeListener(channel: string, listener: (...args: any[]) => void): Electron.IpcRenderer;
+        // Add send if needed
+      };
+    }
+  }
+}

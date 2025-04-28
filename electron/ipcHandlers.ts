@@ -10,6 +10,21 @@ import { execSync } from "child_process"
 import { sanitizeTexts } from "./sanitizer"
 import { processText } from "./textProcessor"
 import { safeLog, safeError } from "./main"
+import { getAiSettings, saveAiSettings } from "./store"
+import * as fsPromises from 'fs/promises'; // Import fs.promises
+import pdf from 'pdf-parse'; // Import pdf-parse
+import mammoth from 'mammoth'; // Import mammoth
+
+// --- Define AI Constants Locally ---
+const DEFAULT_PERSONALITY = 'Default';
+const personalityPrompts: { [key: string]: string } = {
+  [DEFAULT_PERSONALITY]: 'You are a helpful AI assistant providing concise talking points based on the conversation and user context.',
+  'Formal': 'You are a professional AI assistant. Respond formally, concisely, and objectively. Focus on professional language suitable for a job interview setting.',
+  'Friendly': 'You are a friendly and encouraging AI assistant. Use a positive, conversational, and supportive tone. You can be slightly more casual but remain professional.',
+  'Analytical': 'You are an analytical AI assistant. Focus on structured reasoning, logical connections, and potential implications in your responses. Be objective and data-oriented.',
+  'Assertive': 'You are an assertive AI assistant. Be direct, confident, and clear in your communication. Focus on actionable advice and strong statements.',
+};
+// --- End Local AI Constants ---
 
 export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   safeLog("Initializing IPC handlers")
@@ -376,63 +391,69 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   });
 
   // NEW Handler for general AI queries from the text input
-  ipcMain.handle("handle-ai-query", async (_event, { query, language }) => {
-    safeLog(`Handling AI Query: \"${query}\" (Language: ${language})`);
+  ipcMain.handle("handle-ai-query", async (_event, payload) => {
+    // Destructure payload
+    const { query, language, jobContext, resumeTextContent } = payload;
+    
+    safeLog(`Handling AI query: "${query}" (Language: ${language})`);
+    safeLog(`Job Context: ${JSON.stringify(jobContext)}`);
+    safeLog(`Resume provided: ${!!resumeTextContent} (length: ${resumeTextContent?.length || 0})`);
+
+    // Check for API key first
+    if (!configHelper.hasApiKey()) {
+      safeError("AI Query failed: API key missing");
+      deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
+      return { success: false, error: 'API key required' }; // Return structured error
+    }
+
     try {
-      // Check if processingHelper exists (it's optional in deps)
+      // 1. Get AI Settings from store
+      const settings = getAiSettings();
+      const personality = settings.personality; // Uses default from getAiSettings
+      const interviewStage = settings.interviewStage;
+      const userPreferences = settings.userPreferences;
+
+      // 2. Get Base System Prompt
+      const baseSystemPrompt = personalityPrompts[personality] || personalityPrompts[DEFAULT_PERSONALITY];
+
+      // 3. Construct Context String from payload and settings
+      let contextString = 'Relevant Context:\n';
+      if (jobContext?.jobTitle) contextString += `- Job Title: ${jobContext.jobTitle}\n`;
+      if (jobContext?.keySkills) contextString += `- Key Skills: ${jobContext.keySkills}\n`;
+      if (jobContext?.companyMission) contextString += `- Company Mission/Values: ${jobContext.companyMission}\n`;
+      if (interviewStage) contextString += `- Interview Stage: ${interviewStage}\n`;
+      if (userPreferences) contextString += `- User Preferences: ${userPreferences}\n`;
+      if (resumeTextContent) {
+        // Optional: Summarize resume if too long?
+        const summary = resumeTextContent.substring(0, 500); // Limit resume context
+        contextString += `- Resume Summary: ${summary}...\n`;
+      }
+      // Remove initial placeholder if nothing was added
+      if (contextString === 'Relevant Context:\n') {
+         contextString = ''; // No context provided
+      }
+
+      // 4. Construct Final System Prompt
+      let finalSystemPrompt = baseSystemPrompt;
+      if (contextString) {
+        finalSystemPrompt += `\n\n${contextString.trim()}`;
+      }
+      safeLog(`Using Personality: ${personality}`);
+      safeLog(`Final System Prompt: ${finalSystemPrompt.substring(0, 200)}...`);
+
+      // 5. Delegate to ProcessingHelper
       if (!deps.processingHelper) {
         safeError('ProcessingHelper not available in IPC handler dependencies.');
         return { success: false, error: 'Internal error: Processing helper not initialized.' };
       }
-
-      // No need to check API key here, the helper method does it
-      // const config = await configHelper.loadConfig();
-      // const apiKey = config?.apiKey;
-      // if (!apiKey) { ... }
-
-      // Call the new method on the processing helper instance
-      return await deps.processingHelper.handleSimpleQuery(query, language);
-
-      // --- Remove previous commented-out logic and placeholder --- 
-      /*
-      const config = await configHelper.loadConfig();
-      const apiKey = config?.apiKey;
-
-      if (!apiKey) {
-        safeError('API key missing for handle-ai-query');
-        deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
-        return { success: false, error: 'API key is not configured.' };
-      }
-
-      // --- AI Interaction Logic (COMMENTED OUT) --- 
-      safeLog('Attempting AI call...'); 
       
-      // Example using Gemini (replace with your actual implementation)
-      // const genAI = new GoogleGenerativeAI(apiKey);
-      // Choose a model appropriate for general queries (e.g., gemini-pro)
-      // This model name might come from config as well
-      // const modelName = config.model || 'gemini-pro'; // Requires adding 'model' to Config type
-      // const model = genAI.getGenerativeModel({ model: modelName });
-      // 
-      // const result = await model.generateContent(query);
-      // const response = await result.response;
-      // const textResponse = response.text();
-
-      // safeLog(`AI Query successful. Response length: ${textResponse?.length}`);
-      // return { success: true, data: textResponse };
+      const result = await deps.processingHelper.handleSimpleQuery(query, language, finalSystemPrompt);
       
-      // --- End AI Interaction Logic --- 
-
-      // Placeholder response until AI logic is implemented and uncommented
-      safeLog("AI Query handler executed (placeholder response).");
-      return { success: true, data: `Placeholder response for query: \"${query}\"` };
-      */
+      return result;
 
     } catch (error: any) {
-      // The helper method should catch its own errors, but add a fallback
-      safeError('Unexpected error in handle-ai-query handler:', error);
-      const errorMessage = error.message || 'An unknown error occurred processing the AI query.';
-      return { success: false, error: errorMessage };
+      safeError("Error handling AI query in IPC handler:", error);
+      return { success: false, error: error.message || 'An unknown error occurred handling the AI query.' };
     }
   });
 
@@ -595,4 +616,77 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   ipcMain.handle('getOpenAIApiKey', async () => {
     return configHelper.getOpenAIApiKey();
   });
+
+  // --- Add AI Settings Handlers ---
+  ipcMain.handle('get-ai-settings', async () => {
+    try {
+      const settings = getAiSettings(); // Already returns defaults
+      return settings; 
+    } catch (error) {
+      safeError("Error fetching AI settings:", error);
+      // Return defaults on error - getAiSettings handles this now
+      return { personality: DEFAULT_PERSONALITY, interviewStage: 'Initial Screening', userPreferences: '' };
+    }
+  });
+
+  ipcMain.handle('save-ai-settings', async (_event, settings: Partial<{ personality: string; interviewStage: string; userPreferences: string }>) => {
+    try {
+      // Basic validation (optional - store function might handle it)
+      if (settings.personality !== undefined && typeof settings.personality !== 'string') throw new Error("Invalid personality format");
+      if (settings.interviewStage !== undefined && typeof settings.interviewStage !== 'string') throw new Error("Invalid interviewStage format");
+      if (settings.userPreferences !== undefined && typeof settings.userPreferences !== 'string') throw new Error("Invalid userPreferences format");
+      
+      saveAiSettings(settings); // saveAiSettings now handles merging
+      safeLog("AI settings saved:", settings);
+      return { success: true };
+    } catch (error) {
+      safeError("Error saving AI settings:", error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+  // --- End AI Settings Handlers ---
+
+  // --- Add Resume Text Extraction Handler ---
+  ipcMain.handle('extract-resume-text', async (_, filePath: string): Promise<string | null> => {
+    safeLog(`IPC: Received resume text extraction request for path: ${filePath}`);
+    // Input validation
+    if (!filePath || typeof filePath !== 'string') {
+      safeError('IPC: Invalid file path received for resume extraction.');
+      return null;
+    }
+    if (!fs.existsSync(filePath)) {
+      safeError(`IPC: File does not exist at path: ${filePath}`);
+      return null;
+    }
+    
+    try {
+      const fileExtension = path.extname(filePath).toLowerCase();
+      let textContent = null;
+
+      if (fileExtension === '.txt') {
+        textContent = await fsPromises.readFile(filePath, 'utf-8');
+        safeLog('IPC: Parsed .txt file');
+      } else if (fileExtension === '.pdf') {
+        const dataBuffer = await fsPromises.readFile(filePath);
+        const data = await pdf(dataBuffer);
+        textContent = data.text;
+        safeLog('IPC: Parsed .pdf file');
+      } else if (fileExtension === '.docx') {
+        const result = await mammoth.extractRawText({ path: filePath });
+        textContent = result.value;
+        safeLog('IPC: Parsed .docx file');
+      } else {
+        safeError(`IPC: Unsupported file type: ${fileExtension}`);
+        // Return null instead of throwing to avoid exposing error details
+        return null; 
+      }
+      
+      safeLog(`IPC: Extracted text length: ${textContent?.length ?? 0}`);
+      return textContent;
+    } catch (error) {
+      safeError(`IPC: Error processing resume file ${filePath}:`, error);
+      return null; // Return null to indicate failure
+    }
+  });
+  // --- End Resume Text Extraction Handler ---
 }

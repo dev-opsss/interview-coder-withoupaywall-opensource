@@ -1,16 +1,56 @@
 import Store from "electron-store"
 
+// Define the shape of your settings
+interface AiSettings {
+  personality: string;
+  interviewStage: string;
+  userPreferences: string;
+}
+
+// Update the store schema to include AI settings
 interface StoreSchema {
-  // Empty for now, we can add other store items here later
+  aiSettings?: AiSettings;
+  // Add other settings here like resumePath if needed
+  // lastUploadedResumePath?: string;
 }
 
-const store = new Store<StoreSchema>({
-  defaults: {},
-  encryptionKey: "your-encryption-key"
-}) as Store<StoreSchema> & {
-  store: StoreSchema
-  get: <K extends keyof StoreSchema>(key: K) => StoreSchema[K]
-  set: <K extends keyof StoreSchema>(key: K, value: StoreSchema[K]) => void
+// Define default values
+const defaults: StoreSchema = {
+  // Set initial defaults for the new fields
+  aiSettings: { 
+    personality: 'Default', 
+    interviewStage: 'Initial Screening', 
+    userPreferences: ''
+  }
+};
+
+// Explicitly type the store variable
+const store: Store<StoreSchema> = new Store<StoreSchema>({
+  defaults,
+  // Consider making encryptionKey more robust or loading from env
+  // encryptionKey: "your-encryption-key" 
+  // If not using encryption, remove the key.
+  // For development, simple key is okay, but change for production.
+});
+
+// Type-safe getter for AI settings
+export function getAiSettings(): AiSettings {
+  // Always return settings, falling back to defaults
+  const settings = (store as any).get("aiSettings");
+  return {
+    personality: settings?.personality || defaults.aiSettings!.personality,
+    interviewStage: settings?.interviewStage || defaults.aiSettings!.interviewStage,
+    userPreferences: settings?.userPreferences || defaults.aiSettings!.userPreferences,
+  };
 }
 
-export { store }
+// Type-safe setter for AI settings
+export function saveAiSettings(settings: Partial<AiSettings>): void {
+  // Merge with existing settings to allow partial updates
+  const currentSettings = getAiSettings(); 
+  const newSettings = { ...currentSettings, ...settings };
+  (store as any).set("aiSettings", newSettings);
+}
+
+// Export the raw store instance if needed elsewhere (use with caution)
+export { store };
