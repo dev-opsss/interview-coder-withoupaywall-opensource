@@ -21,9 +21,10 @@ interface QueueProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
-  isMicActive: boolean
-  onToggleVoice: () => void
   onToggleChat: () => void
+  onToggleLiveAssistant: () => void
+  isLiveAssistantActive: boolean
+  isChatPanelOpen: boolean
 }
 
 const Queue: React.FC<QueueProps> = ({
@@ -31,9 +32,10 @@ const Queue: React.FC<QueueProps> = ({
   credits,
   currentLanguage,
   setLanguage,
-  isMicActive,
-  onToggleVoice,
-  onToggleChat
+  onToggleChat,
+  onToggleLiveAssistant,
+  isLiveAssistantActive,
+  isChatPanelOpen
 }) => {
   const { showToast } = useToast()
 
@@ -158,9 +160,10 @@ const Queue: React.FC<QueueProps> = ({
             credits={credits}
             currentLanguage={currentLanguage}
             setLanguage={setLanguage}
-            isMicActive={isMicActive}
-            onToggleVoice={onToggleVoice}
+            onToggleLiveAssistant={onToggleLiveAssistant}
+            isLiveAssistantActive={isLiveAssistantActive}
             onToggleChat={onToggleChat}
+            isChatPanelOpen={isChatPanelOpen}
           />
         </div>
       </div>

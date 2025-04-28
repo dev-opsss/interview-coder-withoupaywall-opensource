@@ -9,18 +9,20 @@ interface SubscribedAppProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
-  isMicActive: boolean
-  onToggleVoice: () => void
   onToggleChat: () => void
+  onToggleLiveAssistant: () => void
+  isLiveAssistantActive: boolean
+  isChatPanelOpen: boolean
 }
 
 const SubscribedApp: React.FC<SubscribedAppProps> = ({
   credits,
   currentLanguage,
   setLanguage,
-  isMicActive,
-  onToggleVoice,
-  onToggleChat
+  onToggleChat,
+  onToggleLiveAssistant,
+  isLiveAssistantActive,
+  isChatPanelOpen
 }) => {
   const queryClient = useQueryClient()
   const [view, setView] = useState<"queue" | "solutions" | "debug">("queue")
@@ -148,9 +150,10 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
           credits={credits}
           currentLanguage={currentLanguage}
           setLanguage={setLanguage}
-          isMicActive={isMicActive}
-          onToggleVoice={onToggleVoice}
+          onToggleLiveAssistant={onToggleLiveAssistant}
+          isLiveAssistantActive={isLiveAssistantActive}
           onToggleChat={onToggleChat}
+          isChatPanelOpen={isChatPanelOpen}
         />
       ) : view === "solutions" ? (
         <Solutions

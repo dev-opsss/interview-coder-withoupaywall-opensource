@@ -5,6 +5,7 @@ import {
   QueryClientProvider
 } from "@tanstack/react-query"
 import { useEffect, useState, useCallback, useRef } from "react"
+import { MicVAD, utils } from "@ricky0123/vad-web"
 import {
   Toast,
   ToastDescription,
@@ -16,6 +17,71 @@ import { ToastContext } from "./contexts/toast"
 import { WelcomeScreen } from "./components/WelcomeScreen"
 import { SettingsDialog } from "./components/Settings/SettingsDialog"
 import { GoogleSpeechService } from './services/googleSpeechService'
+import { VoiceTranscriptionPanel } from './components/VoiceTranscriptionPanel'
+
+// Utility function to convert Float32Array PCM audio data to a WAV Blob
+// (Adapted from GoogleSpeechService or could be moved to a shared utils file)
+async function pcmToWavBlob(audioData: Float32Array, sampleRate: number): Promise<Blob> {
+  const writeString = (view: DataView, offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  const targetSampleRate = 16000; // Target for Google Speech
+  const channels = 1; // Mono
+
+  // Resample if necessary (using basic linear interpolation for simplicity here)
+  // A proper resampling library might be better for quality
+  let resampledData = audioData;
+  if (sampleRate !== targetSampleRate) {
+      const ratio = targetSampleRate / sampleRate;
+      const newLength = Math.round(audioData.length * ratio);
+      resampledData = new Float32Array(newLength);
+      for (let i = 0; i < newLength; i++) {
+          const index = i / ratio;
+          const lower = Math.floor(index);
+          const upper = Math.ceil(index);
+          const weight = index - lower;
+          resampledData[i] = (1 - weight) * (audioData[lower] || 0) + weight * (audioData[upper] || 0);
+      }
+      console.log(`Resampled audio from ${sampleRate}Hz to ${targetSampleRate}Hz`);
+  }
+
+
+  const wavLength = resampledData.length * channels * 2; // 2 bytes per sample (16-bit)
+  const buffer = new ArrayBuffer(44 + wavLength); // 44 bytes for WAV header
+  const view = new DataView(buffer);
+
+  // RIFF chunk descriptor
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + wavLength, true); // file length - 8
+  writeString(view, 8, 'WAVE');
+
+  // FMT sub-chunk
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true); // chunk size = 16
+  view.setUint16(20, 1, true); // audio format = 1 (PCM)
+  view.setUint16(22, channels, true); // num channels = 1
+  view.setUint32(24, targetSampleRate, true); // sample rate
+  view.setUint32(28, targetSampleRate * channels * 2, true); // byte rate
+  view.setUint16(32, channels * 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample = 16
+
+  // Data sub-chunk
+  writeString(view, 36, 'data');
+  view.setUint32(40, wavLength, true); // chunk size (audio data length)
+
+  // Write PCM samples
+  let offset = 44;
+  for (let i = 0; i < resampledData.length; i++) {
+    const sample = Math.max(-1, Math.min(1, resampledData[i])); // Clamp value
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true); // Convert to 16-bit signed int
+    offset += 2;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
+}
 
 // Create a React Query client
 const queryClient = new QueryClient({
@@ -40,6 +106,16 @@ const maskApiKey = (apiKey: string): string => {
   // Show first 4 and last 4 characters, mask the rest
   return apiKey.slice(0, 4) + '****' + apiKey.slice(-4);
 };
+
+interface SubscribedAppProps {
+  credits: number
+  currentLanguage: string
+  setLanguage: (language: string) => void
+  onToggleChat: () => void
+  onToggleLiveAssistant: () => void
+  isLiveAssistantActive: boolean
+  isChatPanelOpen: boolean
+}
 
 // Root component that provides the QueryClient
 function App() {
@@ -66,10 +142,27 @@ function App() {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   const audioChunksRef = useRef<Blob[]>([]);
+  
+  // Transcription state
+  const [currentTranscription, setCurrentTranscription] = useState('');
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   // Speech service state
   const [speechService, setSpeechService] = useState<'whisper' | 'google'>('whisper');
   const googleSpeechRef = useRef<GoogleSpeechService | null>(null);
+
+  // --- START: Live Assistant State ---
+  const [isLiveAssistantActive, setIsLiveAssistantActive] = useState(false);
+  const [interviewContext, setInterviewContext] = useState({ jobTitle: '', keySkills: '', companyMission: '' });
+  const [resumeText, setResumeText] = useState<string>('');
+  const [generatedInterviewAnswer, setGeneratedInterviewAnswer] = useState<string>('');
+  const [isAssistantProcessing, setIsAssistantProcessing] = useState<boolean>(false);
+  const [resumeFileName, setResumeFileName] = useState<string>('');
+  // --- END: Live Assistant State ---
+
+  const [vad, setVad] = useState<MicVAD | null>(null); // VAD State
+  const vadSpeakingRef = useRef(false); // Ref to track VAD speaking status
+  const speechAudioBufferRef = useRef<Float32Array[]>([]); // Ref to store speech audio frames
 
   // Show toast method
   const showToast = useCallback(
@@ -88,141 +181,292 @@ function App() {
     []
   )
 
-  // NEW: Whisper-based voice transcription
+  // Modified startRecording with VAD
   const startRecording = useCallback(async () => {
+    if (isRecording) return; // Prevent starting if already recording
+
     try {
-      console.log("Starting recording...");
-      
-      // Make sure API keys are available
+      console.log("Starting recording with VAD...");
+      setIsRecording(true);
+      setCurrentTranscription('');
+      setIsTranscribing(false); // Reset transcribing state
+      audioChunksRef.current = []; // Clear full recording buffer
+      speechAudioBufferRef.current = []; // Clear VAD speech buffer
+      vadSpeakingRef.current = false;
+
+      // Ensure API keys are ready (same checks as before)
       if (speechService === 'whisper') {
-        const apiKey = await window.electronAPI.getOpenAIApiKey();
-        if (!apiKey) {
-          console.error("OpenAI API key not found");
-          showToast("API Key Missing", "OpenAI API key is not configured", "error");
-          return;
-        }
-      } else if (speechService === 'google' && (!googleSpeechRef.current || !await window.electronAPI.getGoogleSpeechApiKey())) {
-        console.error("Google Speech API key not found");
-        showToast("API Key Missing", "Google Speech API key is not configured", "error");
-        return;
+         const apiKey = await window.electronAPI.getOpenAIApiKey();
+         if (!apiKey) throw new Error("OpenAI API key not configured");
+      } else if (speechService === 'google') {
+         const apiKey = await window.electronAPI.getGoogleSpeechApiKey();
+         if (!googleSpeechRef.current || !apiKey) throw new Error("Google Speech API key not configured");
+         // Re-set key in case it was changed in settings while not recording
+         googleSpeechRef.current.setApiKey(apiKey);
       }
-      
-      // Get media stream
+
+      // Keep MediaRecorder for full recording (needed for Whisper fallback/primary)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = 'audio/webm';
-      
-      // Create and configure media recorder
       const recorder = new MediaRecorder(stream, { mimeType });
       setMediaRecorder(recorder);
-      audioChunksRef.current = [];
-      
-      // Collect audio chunks
+
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
       };
       
-      // Set up event handlers
-      recorder.onstart = () => {
-        console.log("MediaRecorder started, state:", recorder.state);
-        showToast('Recording', 'Listening... Click the mic button again to stop', 'success');
-      };
-      
       recorder.onerror = (e) => {
         console.error("MediaRecorder error:", e);
+        // Stop VAD if MediaRecorder fails
+         if (vad) {
+           vad.destroy();
+           setVad(null);
+         }
+        setIsRecording(false);
+        setIsTranscribing(false);
       };
-      
-      // Process audio when recording stops
+
+      // Process audio when recording stops (for final transcription)
       recorder.onstop = async () => {
-        console.log("MediaRecorder stopped");
-        
-        if (audioChunksRef.current.length > 0) {
-          try {
-            // Create a blob from all audio chunks
-            const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-            console.log(`Created audio blob: size=${audioBlob.size} bytes, type=${audioBlob.type}`);
-            
-            // Show transcribing toast
-            showToast("Transcribing", "Converting your speech to text...", "neutral");
-            
-            let transcriptionText = '';
-            
-            // Use appropriate service
-            if (speechService === 'google' && googleSpeechRef.current) {
-              // Use Google Speech-to-Text
-              transcriptionText = await googleSpeechRef.current.transcribeAudio(audioBlob);
-            } else {
-              // Fall back to Whisper
-              const result = await processAudioWithWhisper(audioChunksRef.current);
-              transcriptionText = result?.text || '';
-            }
-            
-            if (transcriptionText) {
-              // Update chat input with transcription
-              setChatInputValue(prev => prev + (prev ? ' ' : '') + transcriptionText);
-              showToast("Transcription Complete", "Your speech has been converted to text", "success");
-            } else {
-              throw new Error("No transcription returned");
-            }
-          } catch (error) {
-            console.error("Error in audio processing:", error);
-            showToast("Transcription Failed", error instanceof Error ? error.message : "Failed to transcribe audio", "error");
+          console.log("MediaRecorder stopped (final processing)");
+          // VAD should already be stopped by stopRecording function, but ensure cleanup
+          if (vad) {
+              try {
+                console.log("Ensuring VAD is stopped in onstop...");
+                vad.pause(); // Use pause instead of destroy if you might restart
+                setVad(null); // Clear state
+              } catch (vadError) {
+                console.error("Error stopping VAD in onstop:", vadError);
+              }
+          } else {
+             console.log("VAD instance not found in onstop.")
           }
-        }
+
+          if (audioChunksRef.current.length > 0) {
+              try {
+                  const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+                  console.log(`Final audio blob: size=${audioBlob.size} bytes, type=${audioBlob.type}`);
+                  showToast("Transcribing", "Converting final speech to text...", "neutral");
+                  setIsTranscribing(true); // Ensure transcribing state is true for the final process
+
+                  let transcriptionText = '';
+                  // --- Keep the existing try/catch logic for Google/Whisper fallback ---
+                  try {
+                    // Try Google Speech first if selected
+                    if (speechService === 'google' && googleSpeechRef.current) {
+                      console.log("Attempting FINAL transcription with Google Speech API...");
+                      // Use transcribeAudio which handles chunking if necessary
+                      transcriptionText = await googleSpeechRef.current.transcribeAudio(audioBlob);
+                      console.log("Google FINAL transcription successful.");
+                       if (transcriptionText) {
+                          console.log("Final transcription obtained via Google.");
+                       }
+                    } else {
+                      // If Google isn't selected, use Whisper directly
+                      console.log("Using Whisper API for FINAL transcription...");
+                      const result = await processAudioWithWhisper(audioChunksRef.current); // Pass chunks to helper
+                      transcriptionText = result?.text || '';
+                      console.log("Whisper FINAL transcription successful.");
+                      if (transcriptionText) {
+                        console.log("Final transcription obtained via Whisper (primary).");
+                      }
+                    }
+                  } catch (googleError) {
+                    // If Google Speech API failed, fall back to Whisper
+                    console.error("Google Speech API FINAL failed:", googleError);
+                    console.log("Falling back to Whisper API for FINAL transcription...");
+                    showToast("Info", "Google Speech failed, falling back to Whisper...", "neutral");
+                    try {
+                      const result = await processAudioWithWhisper(audioChunksRef.current); // Pass chunks
+                      transcriptionText = result?.text || '';
+                      console.log("Whisper FINAL fallback transcription successful.");
+                      if (transcriptionText) {
+                        console.log("Final transcription obtained via Whisper (fallback).");
+                      }
+                    } catch (whisperError) {
+                      // Handle error if Whisper fallback also fails
+                      console.error("Whisper FINAL fallback failed:", whisperError);
+                      console.log("FINAL transcription failed using both Google and Whisper.");
+                      throw whisperError; // Re-throw to be caught by the outer catch
+                    }
+                  }
+                  // --- End of Google/Whisper fallback logic ---
+
+                  // Update transcription state AFTER attempting Google and potentially Whisper
+                  setCurrentTranscription(transcriptionText); // Display final result
+                  setIsTranscribing(false); // Mark final transcription as complete
+
+                  if (transcriptionText) {
+                    showToast("Transcription Complete", "Your speech has been converted to text", "success");
+                  } else {
+                     // It's possible to have no transcription if only silence was recorded
+                     console.log("Final transcription resulted in empty text.");
+                     showToast("Transcription Complete", "No speech detected in the recording.", "neutral");
+                     // Optionally clear transcription panel: setCurrentTranscription('');
+                  }
+              } catch (error) {
+                  console.error("Error in final audio processing:", error);
+                  showToast("Transcription Failed", error instanceof Error ? error.message : "Failed to transcribe final audio", "error");
+                  setIsTranscribing(false); // Ensure state is reset on error
+                  setCurrentTranscription(''); // Clear transcription on error
+              }
+          } else {
+             console.log("No audio chunks recorded for final processing.");
+             setIsTranscribing(false); // No data, so not transcribing
+             setCurrentTranscription(''); // Clear any previous partial transcription
+          }
       };
-      
-      // Start recording
-      recorder.start(1000); // Record in chunks of 1 second
-      setIsRecording(true);
-      
-    } catch (error: unknown) {
-      console.error('Recording error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to access microphone';
-      showToast('Microphone Error', errorMessage, 'error');
-    }
-  }, [showToast, speechService]);
-  
-  // Helper function to process partial audio chunks during recording
-  const processPartialAudio = async (audioBlob: Blob, apiKey: string) => {
-    try {
-      // Create FormData and append the file
-      const formData = new FormData();
-      const file = new File([audioBlob], "partial_audio.webm", { type: 'audio/webm' });
-      formData.append("file", file);
-      formData.append("model", "whisper-1");
-      formData.append("language", "en");
-      
-      // Make request to Whisper API
-      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`
+
+      // --- VAD Setup ---
+      console.log("Initializing VAD...");
+      const myVad = await MicVAD.new({
+        stream: stream, // Use the same stream as MediaRecorder
+        positiveSpeechThreshold: 0.85, // Adjust sensitivity as needed
+        negativeSpeechThreshold: 0.75,
+        redemptionFrames: 3, // Replaced minSilenceFrames with redemptionFrames for silence detection after speech
+        // Pre-speech buffer can help catch start of words
+        // preSpeechPadFrames: 5,
+
+        onSpeechStart: () => {
+          console.log("VAD: Speech started");
+          vadSpeakingRef.current = true;
+          speechAudioBufferRef.current = []; // Start collecting new speech segment
         },
-        body: formData
+
+        onSpeechEnd: async (audio: Float32Array) => {
+          console.log(`VAD: Speech ended. Audio duration: ${(audio.length / 16000).toFixed(2)}s`);
+          vadSpeakingRef.current = false;
+          speechAudioBufferRef.current = [];
+
+          if (speechService !== 'google' || !googleSpeechRef.current) {
+             console.log("VAD: Speech ended, but not using Google for partial transcription.");
+             return;
+          }
+
+          const sampleRate = 16000; 
+          const speechBlob = await pcmToWavBlob(audio, sampleRate);
+
+          if (speechBlob.size > 1000) {
+             console.log(`VAD: Sending speech segment to Google: Size=${(speechBlob.size / 1024).toFixed(1)}KB`);
+             // Keep isTranscribing true while partial transcription happens
+             // setIsTranscribing(true); // Already managed elsewhere if needed?
+
+             let partialTranscriptionResult: string | null = null;
+             try {
+                 partialTranscriptionResult = await googleSpeechRef.current.transcribePartialAudio(speechBlob);
+                 
+                 // Check if transcription is a non-empty string before proceeding
+                 if (typeof partialTranscriptionResult === 'string' && partialTranscriptionResult.trim().length > 0) { 
+                     const confirmedTranscription = partialTranscriptionResult; // Assign to new const in this scope
+                     console.log(`VAD: Google partial transcription: "${confirmedTranscription.substring(0, 30)}${confirmedTranscription.length > 30 ? '...' : ''}"`);
+                     setCurrentTranscription(prev => (prev ? prev + " " + confirmedTranscription : confirmedTranscription).trim());
+                     
+                     // --- TRIGGER LIVE ASSISTANCE --- 
+                     if (isLiveAssistantActive) {
+                         handleGenerateLiveAssistance(confirmedTranscription); // Use the confirmed transcription
+                     }
+                     // --- END TRIGGER --- 
+
+                 } else {
+                     console.log("VAD: Google partial transcription returned empty.");
+                 }
+             } catch (error) {
+                 console.error("VAD: Error in Google partial transcription:", error);
+             } finally {
+                 // Set transcribing false *if* VAD isn't currently detecting speech?
+                 // This logic might need review depending on how isTranscribing is used elsewhere.
+                 // if (!vadSpeakingRef.current) {
+                 //    setIsTranscribing(false);
+                 // }
+            }
+          } else {
+             console.log("VAD: Speech segment too small to send for partial transcription.");
+          }
+        },
+        // Optional: Collect raw audio frames while speaking
+        // onFrameProcessed: (frame) => {
+        //  if (vadSpeakingRef.current) {
+        //    // frame is Float32Array
+        //    speechAudioBufferRef.current.push(frame.slice()); // Store a copy
+        //  }
+        // }
       });
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.error?.message || `API returned ${response.status}: ${response.statusText}`);
+
+      if (!myVad) {
+         throw new Error("Failed to initialize VAD");
       }
       
-      const data = await response.json();
-      console.log("Partial transcription result:", data);
-      
-      return data;
-    } catch (error) {
-      console.error("Error in partial audio processing:", error);
-      return null;
-    }
-  };
-  
-  const stopRecording = useCallback(() => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
+      setVad(myVad); // Store VAD instance
+      myVad.start(); // Start VAD listening
+      recorder.start(1000); // Start MediaRecorder in parallel
+      console.log("VAD and MediaRecorder started.");
+      showToast('Recording', 'Listening for speech...', 'success');
+
+    } catch (error: unknown) {
+      console.error('Recording start error:', error);
+      const errorMsg = error instanceof Error ? error.message : 'Failed to start recording';
+      showToast('Error', errorMsg, 'error');
       setIsRecording(false);
+      setIsTranscribing(false);
+       // Ensure VAD is cleaned up on error
+       if (vad) {
+          try { vad.destroy(); } catch (e) {}
+          setVad(null);
+       }
+       // Ensure MediaRecorder stream tracks are stopped
+       if (mediaRecorder && mediaRecorder.stream) {
+           mediaRecorder.stream.getTracks().forEach(track => track.stop());
+       }
+       setMediaRecorder(null);
     }
-  }, [mediaRecorder]);
+  }, [showToast, speechService, isRecording, vad, mediaRecorder, isLiveAssistantActive]); // Added dependencies
+
+
+  // Modified stopRecording with VAD cleanup
+  const stopRecording = useCallback(() => {
+    console.log("Stop recording requested...");
+    if (vad) {
+      try {
+        console.log("Stopping VAD...");
+        vad.destroy(); // Fully stop and release VAD resources
+        setVad(null);
+         vadSpeakingRef.current = false; // Ensure speaking ref is false
+      } catch (e) {
+        console.error("Error destroying VAD:", e);
+      }
+    } else {
+       console.log("VAD instance not found during stopRecording.")
+    }
+
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      console.log("Stopping MediaRecorder...");
+      // Let the recorder.onstop handler manage setIsTranscribing(true)
+      // setIsTranscribing(true); // Moved to recorder.onstop
+
+      try {
+         mediaRecorder.stop(); // This will trigger recorder.onstop asynchronously
+      } catch(e) {
+            console.error("Error stopping MediaRecorder:", e);
+          // Force state reset if stop fails
+          setIsRecording(false);
+         setIsTranscribing(false);
+      } finally {
+        // Don't stop stream tracks here immediately, let onstop handle final blob creation
+        // if (mediaRecorder.stream) {
+        //   mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        // }
+         setIsRecording(false); // Set recording state false immediately
+        // Don't setMediaRecorder(null) here, onstop needs it temporarily
+      }
+    } else {
+       console.log("MediaRecorder not active or already stopped.");
+        // If recorder wasn't active, ensure UI state is correct
+       setIsRecording(false);
+       setIsTranscribing(false);
+    }
+  }, [mediaRecorder, vad]); // Added VAD dependency
 
   // Set unlimited credits
   const updateCredits = useCallback(() => {
@@ -400,6 +644,23 @@ function App() {
     setIsChatPanelOpen(prev => !prev);
   }, []);
 
+  // --- START: Live Assistant Toggle (Reverted to simple toggle) ---
+  const toggleLiveAssistant = useCallback(() => {
+    setIsLiveAssistantActive(prev => !prev);
+    // Recording is now handled independently by the panel's mic button and close button
+  }, []);
+  // --- END: Live Assistant Toggle ---
+
+  // --- START: Dedicated Deactivation Function (Still needed for Panel Close) ---
+  const deactivateLiveAssistant = useCallback(() => {
+    if (isLiveAssistantActive) { 
+      console.log("Live Assistant Deactivated via Close Button - Stopping Recording");
+      stopRecording(); // Stop recording when panel is closed
+      setIsLiveAssistantActive(false);
+    }
+  }, [isLiveAssistantActive, stopRecording]);
+  // --- END: Dedicated Deactivation Function ---
+
   // NEW: Direct Web Speech API implementation - MOVED ABOVE onToggleVoiceInput
   const toggleWebSpeech = useCallback(() => {
     // Disable speech recognition but keep the interface working
@@ -519,19 +780,29 @@ function App() {
         // Initialize Google Speech service
         if (!googleSpeechRef.current) {
           googleSpeechRef.current = new GoogleSpeechService();
+          console.log("Google Speech Service initialized");
         }
         
         // Load selected speech service
         const service = await window.electronAPI.getSpeechService() || 'whisper';
+        console.log(`Selected speech service: ${service}`);
         setSpeechService(service as 'whisper' | 'google');
         
         // If Google is selected, load API key
         if (service === 'google') {
           const apiKey = await window.electronAPI.getGoogleSpeechApiKey();
+          console.log(`Google API key retrieved: ${apiKey ? 'Yes (length: ' + apiKey.length + ')' : 'No'}`);
+          
           if (apiKey && googleSpeechRef.current) {
+            // Mask the API key for logging
+            const maskedKey = maskApiKey(apiKey);
+            console.log(`Setting Google Speech API key: ${maskedKey}`);
+            
+            // Set the API key in the service
             googleSpeechRef.current.setApiKey(apiKey);
           } else {
             // Fall back to whisper if no API key
+            console.error("No Google Speech API key found, falling back to Whisper");
             setSpeechService('whisper');
             showToast('Warning', 'Google Speech API key not found, using Whisper instead', 'neutral');
           }
@@ -547,6 +818,94 @@ function App() {
     }
   }, [isInitialized, showToast]);
 
+  // --- START: Live Assistance Logic ---
+  // Function to handle fetching AI assistance based on transcribed text
+  const handleGenerateLiveAssistance = useCallback(async (transcribedQuestion: string) => {
+    if (!transcribedQuestion.trim()) return;
+    console.log("Generating live assistance for transcription:", transcribedQuestion);
+    console.log("Context:", interviewContext);
+    console.log("Resume Snippet:", resumeText.substring(0, 100) + "...");
+    setGeneratedInterviewAnswer(''); // Clear previous assistance
+    setIsAssistantProcessing(true);
+
+    // Construct prompt for talking points/keywords
+    const prompt = `Act as a helpful interview assistant providing concise talking points. Based ONLY on the provided resume text and job context, generate 2-3 brief bullet points or keywords relevant to answering the following transcribed potential interview question:
+
+[Transcribed Question/Statement]:
+${transcribedQuestion}
+
+[Job Context]:
+Title: ${interviewContext.jobTitle || 'N/A'}
+Key Skills: ${interviewContext.keySkills || 'N/A'}
+Company Mission/Values: ${interviewContext.companyMission || 'N/A'}
+
+[Resume Text]:
+${resumeText || 'N/A'}
+
+Provide only the key talking points/keywords as bullet points, without any introductory or concluding remarks. If the resume or context is irrelevant, state that. Keep the points very brief.`;
+
+    try {
+      // Call the backend API for AI response
+      const result = await window.electronAPI.handleAiQuery({ 
+        query: prompt, // Use the structured prompt
+        language: currentLanguage // Keep language context if needed, though prompt is English
+      });
+
+      if (result && result.success && typeof result.data === 'string') {
+        setGeneratedInterviewAnswer(result.data);
+      } else {
+        console.error("AI Assistance Error:", result?.error || "Failed to get response.");
+        setGeneratedInterviewAnswer("Error generating assistance."); // Show error in panel
+      }
+    } catch (error: any) {
+      console.error("AI Communication Error:", error);
+      setGeneratedInterviewAnswer("Error communicating with AI service."); // Show error in panel
+    } finally {
+      setIsAssistantProcessing(false);
+    }
+  }, [interviewContext, resumeText, currentLanguage]); // Dependencies: context, resume, language
+
+  // Function to handle resume upload and text extraction
+  const handleResumeUpload = useCallback(async (file: File) => {
+    if (!file) return;
+    console.log("Processing resume:", file.name);
+    setResumeText('Processing...'); // Indicate processing
+    setResumeFileName(file.name);
+    try {
+      // Assuming 'uploadResume' is set up in preload to call main process text extraction
+      const extractedText = await window.electronAPI.uploadResume(file.path); 
+      if (extractedText) {
+        setResumeText(extractedText);
+        showToast("Success", "Resume processed successfully.", "success");
+      } else {
+        setResumeText('');
+        setResumeFileName('');
+        showToast("Error", "Failed to extract text from resume.", "error");
+      }
+    } catch (error) {
+        console.error("Error processing resume:", error);
+        setResumeText('');
+        setResumeFileName('');
+        showToast("Error", "Failed to process resume.", "error");
+    }
+  }, [showToast]);
+
+  // Update context state - passed down to panel
+  const handleContextChange = useCallback((contextUpdate: Partial<typeof interviewContext>) => {
+    setInterviewContext(prev => ({ ...prev, ...contextUpdate }));
+  }, []);
+
+  // --- END: Live Assistance Logic ---
+
+  // --- Microphone Toggle --- // NEW
+  const toggleMicrophone = useCallback(() => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  }, [isRecording, startRecording, stopRecording]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
@@ -558,9 +917,10 @@ function App() {
                   credits={credits}
                   currentLanguage={currentLanguage}
                   setLanguage={updateLanguage}
-                  isMicActive={false}
-                  onToggleVoice={onToggleVoiceInput}
                   onToggleChat={toggleChatPanel}
+                  onToggleLiveAssistant={toggleLiveAssistant}
+                  isLiveAssistantActive={isLiveAssistantActive}
+                  isChatPanelOpen={isChatPanelOpen}
                 />
               ) : (
                 <WelcomeScreen onOpenSettings={handleOpenSettings} />
@@ -596,6 +956,24 @@ function App() {
             <ToastDescription>{toastState.description}</ToastDescription>
           </Toast>
           <ToastViewport />
+          
+          {/* Live Assistant Panel - Rendered based on state */}
+          {isLiveAssistantActive && (
+            <VoiceTranscriptionPanel
+              isRecording={isRecording} // Pass independent recording state
+              transcription={currentTranscription} // Pass transcription
+              isTranscribing={isTranscribing} // Pass transcribing state
+              speechService={speechService} // Pass speech service
+              generatedAssistance={generatedInterviewAnswer} // Pass assistance text
+              isAssistantProcessing={isAssistantProcessing} // Pass loading state
+              jobContext={interviewContext} // Pass job context
+              resumeFileName={resumeFileName} // Pass resume filename
+              onResumeUpload={handleResumeUpload} // Pass upload handler
+              onContextChange={handleContextChange} // Pass context change handler
+              onToggleMicrophone={toggleMicrophone} // Pass mic toggle function
+              onClose={deactivateLiveAssistant} // Pass panel close/deactivation function
+            />
+          )}
           
           {isChatPanelOpen && (
             <div className="fixed top-20 right-4 bottom-20 z-50 w-80 bg-white dark:bg-gray-800 shadow-2xl rounded-xl overflow-hidden flex flex-col border border-indigo-100 dark:border-gray-700">

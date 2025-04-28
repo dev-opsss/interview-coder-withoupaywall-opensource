@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client"
 import { useToast } from "../../contexts/toast"
 import { LanguageSelector } from "../shared/LanguageSelector"
 import { COMMAND_KEY } from "../../utils/platform"
-import VoiceButton from "./VoiceButton"
 import AIChatButton from "./AIChatButton"
 
 interface QueueCommandsProps {
@@ -13,9 +12,10 @@ interface QueueCommandsProps {
   credits: number
   currentLanguage: string
   setLanguage: (language: string) => void
-  isMicActive?: boolean
-  onToggleVoice?: () => void
   onToggleChat?: () => void
+  onToggleLiveAssistant?: () => void
+  isLiveAssistantActive?: boolean
+  isChatPanelOpen?: boolean
 }
 
 const QueueCommands: React.FC<QueueCommandsProps> = ({
@@ -24,32 +24,17 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   credits,
   currentLanguage,
   setLanguage,
-  isMicActive = false,
-  onToggleVoice = () => {},
-  onToggleChat = () => {}
+  onToggleChat = () => {},
+  onToggleLiveAssistant = () => {},
+  isLiveAssistantActive = false,
+  isChatPanelOpen = false
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [isAIChatActive, setIsAIChatActive] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
   const { showToast } = useToast()
 
-  // Track voice input status changes from parent component
-  useEffect(() => {
-    // Listen for toggle-voice-input events from the main process
-    const removeListener = window.electronAPI.onToggleVoiceInput(() => {
-      // This is fired when the keyboard shortcut is used
-      onToggleVoice();
-    });
-
-    return () => {
-      // Clean up listener when component unmounts
-      removeListener();
-    };
-  }, [onToggleVoice]);
-
   // Handle AI Chat toggle
   const handleToggleChat = () => {
-    setIsAIChatActive(prev => !prev);
     onToggleChat();
   };
 
@@ -226,15 +211,29 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           {/* Separator */}
           <div className="mx-2 h-4 w-px bg-white/20" />
 
-          {/* Voice Button Component */}
-          <VoiceButton isActive={isMicActive} onToggle={onToggleVoice} />
-          
           {/* AI Chat Button Component */}
-          <AIChatButton isActive={isAIChatActive} onToggle={handleToggleChat} />
+          <AIChatButton isActive={isChatPanelOpen} onToggle={handleToggleChat} />
           
-          {/* Separator */}
-          <div className="mx-2 h-4 w-px bg-white/20" />
-
+          {/* Live Assist Button - Updated onClick and title */}
+          <div
+            className={`flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 transition-colors ${ 
+              isLiveAssistantActive 
+                ? "bg-indigo-600 text-white" 
+                : "hover:bg-white/10 text-white/70"
+            }`}
+            title={isLiveAssistantActive ? "Deactivate Live Assistant" : "Activate Live Interview Assistant"}
+            onClick={onToggleLiveAssistant}
+          >
+             {/* Use a simple icon or just text */}
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" >
+                <path d="M17 18C18.1046 18 19 17.1046 19 16C19 14.8954 18.1046 14 17 14C15.8954 14 15 14.8954 15 16C15 17.1046 15.8954 18 17 18Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M7 10C8.10457 10 9 9.10457 9 8C9 6.89543 8.10457 6 7 6C5.89543 6 5 6.89543 5 8C5 9.10457 5.89543 10 7 10Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M7 14V10M7 10V6M7 10H15M17 14V18M17 14H7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M12 21C7.85786 21 4.5 17.6421 4.5 13.5C4.5 9.35786 7.85786 6 12 6C16.1421 6 19.5 9.35786 19.5 13.5C19.5 17.6421 16.1421 21 12 21Z" stroke="currentColor" strokeWidth="1.5"/>
+             </svg>
+            <span className="text-[11px] leading-none">Live Assist</span>
+          </div>
+          
           {/* Settings with Tooltip */}
           <div
             className="relative inline-block"

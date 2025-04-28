@@ -448,6 +448,8 @@ const electronAPI = {
   saveGoogleSpeechApiKey: (apiKey: string) => ipcRenderer.invoke('saveGoogleSpeechApiKey', apiKey),
   getSpeechService: () => ipcRenderer.invoke('getSpeechService'),
   saveSpeechService: (service: 'whisper' | 'google') => ipcRenderer.invoke('saveSpeechService', service),
+
+  uploadResume: (filePath: string) => ipcRenderer.invoke('handle-resume-upload', filePath),
 }
 
 // Before exposing the API
@@ -471,3 +473,10 @@ ipcRenderer.on("restore-focus", () => {
 })
 
 // Remove auth-callback handling - no longer needed
+
+// Also expose a way to remove listeners if needed (example)
+contextBridge.exposeInMainWorld("electronUtils", {
+  removeListener: (channel: string, listener: (...args: any[]) => void) => {
+    ipcRenderer.removeListener(channel, listener)
+  }
+})
