@@ -1374,7 +1374,11 @@ If you include code examples, use proper markdown code blocks with language spec
   }
 
   // Add a new method for handling simple text queries
-  public async handleSimpleQuery(query: string, language: string): Promise<{ success: boolean, data?: string, error?: string }> {
+  public async handleSimpleQuery(
+    query: string, 
+    language: string, 
+    systemPrompt?: string
+  ): Promise<{ success: boolean, data?: string, error?: string }> {
     safeLog(`Handling simple query: "${query}" (Language: ${language})`);
     const config = configHelper.loadConfig();
     const mainWindow = this.deps.getMainWindow();
@@ -1403,8 +1407,10 @@ If you include code examples, use proper markdown code blocks with language spec
       }
     }
 
-    // Use a generic system prompt
-    const systemPrompt = "You are a helpful AI assistant. Respond clearly and concisely.";
+    // Use the provided system prompt or a default
+    const finalSystemPrompt = systemPrompt || "You are a helpful AI assistant. Respond clearly and concisely.";
+    safeLog(`Using System Prompt: ${finalSystemPrompt.substring(0, 100)}...`);
+    
     // Define the model to use (e.g., using the solutionModel or a dedicated one)
     const modelName = config.solutionModel; // Re-use solution model for now
 
@@ -1415,7 +1421,7 @@ If you include code examples, use proper markdown code blocks with language spec
         const completion = await this.openaiClient!.chat.completions.create({
           model: modelName || "gpt-4o",
           messages: [
-            { role: "system", content: systemPrompt },
+            { role: "system", content: finalSystemPrompt }, // Use finalSystemPrompt
             { role: "user", content: query }
           ],
           max_tokens: 1500, // Adjust token limit as needed
@@ -1424,8 +1430,10 @@ If you include code examples, use proper markdown code blocks with language spec
         responseText = completion.choices[0].message.content;
 
       } else if (config.apiProvider === "gemini") {
+        // IMPORTANT: Gemini standard API expects system prompt within the user message or specific setup.
+        // Combining here for simplicity, review Gemini docs for best practices.
         const geminiMessages: GeminiMessage[] = [
-          { role: "user", parts: [{ text: `${systemPrompt}\n\nUser Query: ${query}` }] }
+          { role: "user", parts: [{ text: `${finalSystemPrompt}\n\nUser Query: ${query}` }] }
         ];
         const response = await axios.default.post(
           `https://generativelanguage.googleapis.com/v1beta/models/${modelName || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
@@ -1451,7 +1459,7 @@ If you include code examples, use proper markdown code blocks with language spec
           messages: [
             { role: "user", content: query }
           ],
-          system: systemPrompt, // Anthropic uses a dedicated system parameter
+          system: finalSystemPrompt, // Use finalSystemPrompt
           temperature: 0.5,
         });
         responseText = (response.content[0] as { type: 'text', text: string }).text;
