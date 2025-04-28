@@ -12,6 +12,7 @@ import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
+import { GoogleSpeechService } from '../../services/googleSpeechService';
 
 type APIProvider = "openai" | "gemini" | "anthropic";
 
@@ -316,12 +317,59 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
 
   const handleSaveSpeechSettings = async () => {
     try {
-      await window.electronAPI.saveGoogleSpeechApiKey(googleApiKey);
+      // Trim the API key to remove any accidental whitespace
+      const trimmedGoogleApiKey = googleApiKey.trim();
+      
+      console.log(`Saving Google Speech API key: ${trimmedGoogleApiKey ? 'Yes (length: ' + trimmedGoogleApiKey.length + ')' : 'No'}`);
+      
+      // Additional validation for Google API key format
+      if (speechService === 'google' && trimmedGoogleApiKey) {
+        if (!trimmedGoogleApiKey.match(/^[A-Za-z0-9_-]+$/)) {
+          showToast('Warning', 'Google API key contains invalid characters', 'error');
+          return;
+        }
+      }
+      
+      await window.electronAPI.saveGoogleSpeechApiKey(trimmedGoogleApiKey);
       await window.electronAPI.saveSpeechService(speechService);
+      
       showToast('Success', 'Speech settings saved', 'success');
+      
+      // Give feedback about next steps
+      if (speechService === 'google' && trimmedGoogleApiKey) {
+        showToast('Info', 'Please ensure the Speech-to-Text API is enabled in your Google Cloud project', 'neutral');
+      }
     } catch (error) {
       console.error('Failed to save speech settings:', error);
       showToast('Error', 'Failed to save speech settings', 'error');
+    }
+  };
+
+  // Add function to test Google API key
+  const testGoogleApiKey = async () => {
+    try {
+      if (!googleApiKey.trim()) {
+        showToast('Error', 'Please enter a Google Speech API key first', 'error');
+        return;
+      }
+      
+      showToast('Testing', 'Testing Google Speech API key...', 'neutral');
+      
+      // Create a test instance of GoogleSpeechService
+      const testService = new GoogleSpeechService();
+      testService.setApiKey(googleApiKey.trim());
+      
+      // Test the API key
+      const isValid = await testService.testApiKey();
+      
+      if (isValid) {
+        showToast('Success', 'Google Speech API key is valid!', 'success');
+      } else {
+        showToast('Error', 'Google Speech API key is invalid or not configured for Speech-to-Text', 'error');
+      }
+    } catch (error) {
+      console.error('Error testing Google API key:', error);
+      showToast('Error', 'Failed to test Google API key', 'error');
     }
   };
 
@@ -630,7 +678,28 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   This API key must have access to the Speech-to-Text API in your Google Cloud project.
+                  <button 
+                    onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/apis/library/speech.googleapis.com')}
+                    className="text-blue-500 underline ml-1"
+                  >
+                    Enable API
+                  </button>
                 </p>
+                <div className="flex justify-between items-center mt-2">
+                  <button
+                    onClick={testGoogleApiKey}
+                    className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+                    disabled={isLoading || !googleApiKey.trim()}
+                  >
+                    Test API Key
+                  </button>
+                  <button
+                    onClick={() => window.electronAPI.openLink('https://cloud.google.com/speech-to-text/docs/quickstart')}
+                    className="text-blue-500 underline text-xs"
+                  >
+                    View Documentation
+                  </button>
+                </div>
               </div>
             )}
           </div>

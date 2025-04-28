@@ -10,10 +10,11 @@ const AIChatButton: React.FC<AIChatButtonProps> = ({ isActive, onToggle }) => {
     <div
       className={`flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 transition-colors ${
         isActive 
-          ? "bg-green-500 text-white" 
-          : "hover:bg-white/10"
+          ? "bg-blue-600 text-white"
+          : "text-white/70 hover:bg-white/10"
       }`}
       onClick={onToggle}
+      title={isActive ? "Close AI Chat" : "Open AI Chat"}
     >
       <div className="w-4 h-4 flex items-center justify-center">
         <svg

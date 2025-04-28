@@ -47,6 +47,9 @@ import { ShortcutsHelper } from "./shortcuts"
 import { initAutoUpdater } from "./autoUpdater"
 import { configHelper } from "./ConfigHelper"
 import * as dotenv from "dotenv"
+import fsPromises from 'fs/promises'; // Use promises version of fs
+import pdf from 'pdf-parse';
+import mammoth from 'mammoth';
 
 // Global uncaughtException handler for EPIPE errors
 process.on('uncaughtException', (error: NodeJS.ErrnoException) => {
@@ -1137,6 +1140,40 @@ ipcMain.handle('saveSpeechService', async (_, service) => {
   config.speechService = service;
   await saveConfig(config);
   return true;
+});
+
+// Add this handler for resume uploads
+ipcMain.handle('handle-resume-upload', async (_, filePath: string): Promise<string | null> => {
+  console.log(`Main: Received resume upload request for path: ${filePath}`);
+  try {
+    const fileExtension = path.extname(filePath).toLowerCase();
+    let textContent = null;
+
+    if (fileExtension === '.txt') {
+      textContent = await fsPromises.readFile(filePath, 'utf-8');
+      console.log('Main: Parsed .txt file');
+    } else if (fileExtension === '.pdf') {
+      const dataBuffer = await fsPromises.readFile(filePath);
+      const data = await pdf(dataBuffer);
+      textContent = data.text;
+      console.log('Main: Parsed .pdf file');
+    } else if (fileExtension === '.docx') {
+      const result = await mammoth.extractRawText({ path: filePath });
+      textContent = result.value;
+      console.log('Main: Parsed .docx file');
+    } else {
+      console.error(`Main: Unsupported file type: ${fileExtension}`);
+      throw new Error('Unsupported file type. Please upload .txt, .pdf, or .docx');
+    }
+    
+    console.log(`Main: Extracted text length: ${textContent?.length ?? 0}`);
+    return textContent;
+  } catch (error) {
+    console.error(`Main: Error processing resume file ${filePath}:`, error);
+    // Optionally, return a specific error message or just null
+    // throw error; // Re-throwing sends the error object back, which might expose paths
+    return null; // Return null to indicate failure without exposing details
+  }
 });
 
 // Initialize application
