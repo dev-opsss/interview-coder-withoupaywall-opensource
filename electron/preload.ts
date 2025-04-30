@@ -319,8 +319,9 @@ const electronAPI = {
         'saveGoogleSpeechApiKey',
         'getSpeechService',
         'saveSpeechService',
-        'handle-resume-upload',
-        'transcribe-audio'
+        'extract-resume-text',
+        'transcribe-audio',
+        'generate-response-suggestion'
       ];
       if (!allowedInvokeChannels.includes(channel)) {
           safeLog(`Preload ERROR: Denied invoke call to untrusted channel: ${channel}`);
@@ -465,6 +466,8 @@ const electronAPI = {
   // Allow partial settings object for saving
   saveAiSettings: (settings: Partial<{ personality: string; interviewStage: string; userPreferences: string }>) => 
     ipcRenderer.invoke('save-ai-settings', settings),
+  generateResponseSuggestion: (payload: { question: string; jobContext: any; resumeTextContent: string | null; }) => 
+    ipcRenderer.invoke('generate-response-suggestion', payload),
 }
 
 // Before exposing the API
@@ -539,6 +542,10 @@ declare global {
       
       // ---> Add Resume Text Extraction Type <-----
       extractResumeText: (filePath: string) => Promise<string | null>;
+      // ---> END Add Type <-------------------------
+
+      // ---> Add Response Suggestion Type <-----
+      generateResponseSuggestion: (payload: { question: string; jobContext: any; resumeTextContent: string | null; }) => Promise<{ success: boolean; data?: string; error?: string }>;
       // ---> END Add Type <-------------------------
 
       onTranscriptionReceived: (callback: (text: string) => void) => () => void;

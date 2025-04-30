@@ -15,16 +15,16 @@ import * as fsPromises from 'fs/promises'; // Import fs.promises
 import pdf from 'pdf-parse'; // Import pdf-parse
 import mammoth from 'mammoth'; // Import mammoth
 
-// --- Define AI Constants Locally ---
-const DEFAULT_PERSONALITY = 'Default';
-const personalityPrompts: { [key: string]: string } = {
+// --- Define and EXPORT AI Constants ---
+export const DEFAULT_PERSONALITY = 'Default';
+export const personalityPrompts: { [key: string]: string } = {
   [DEFAULT_PERSONALITY]: 'You are a helpful AI assistant providing concise talking points based on the conversation and user context.',
   'Formal': 'You are a professional AI assistant. Respond formally, concisely, and objectively. Focus on professional language suitable for a job interview setting.',
   'Friendly': 'You are a friendly and encouraging AI assistant. Use a positive, conversational, and supportive tone. You can be slightly more casual but remain professional.',
   'Analytical': 'You are an analytical AI assistant. Focus on structured reasoning, logical connections, and potential implications in your responses. Be objective and data-oriented.',
   'Assertive': 'You are an assertive AI assistant. Be direct, confident, and clear in your communication. Focus on actionable advice and strong statements.',
 };
-// --- End Local AI Constants ---
+// --- End AI Constants ---
 
 export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   safeLog("Initializing IPC handlers")
@@ -689,4 +689,46 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     }
   });
   // --- End Resume Text Extraction Handler ---
+
+  // --- Add Response Suggestion Handler ---
+  ipcMain.handle('generate-response-suggestion', async (_event, payload) => {
+    safeLog('IPC: Received generate-response-suggestion request');
+    const { question, jobContext, resumeTextContent } = payload;
+    
+    // Basic validation
+    if (!question || typeof question !== 'string') {
+      return { success: false, error: 'Invalid question provided.' };
+    }
+    
+    // Check API key
+    if (!configHelper.hasApiKey()) {
+      safeError("Response Suggestion failed: API key missing");
+      deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
+      return { success: false, error: 'API key required' };
+    }
+    
+    // Check if processingHelper exists
+    if (!deps.processingHelper) {
+      safeError('ProcessingHelper not available for response suggestion');
+      return { success: false, error: 'Internal error: Processing helper not initialized.' };
+    }
+    
+    try {
+      // Fetch current settings from store
+      const settings = getAiSettings(); 
+      
+      // Call the new method in ProcessingHelper
+      const result = await deps.processingHelper.generateResponseSuggestion(
+        question,
+        jobContext, 
+        resumeTextContent,
+        settings // Pass the full settings object
+      );
+      return result;
+    } catch (error: any) {
+      safeError("Error handling response suggestion in IPC handler:", error);
+      return { success: false, error: error.message || 'An unknown error occurred generating the response suggestion.' };
+    }
+  });
+  // --- End Response Suggestion Handler ---
 }
