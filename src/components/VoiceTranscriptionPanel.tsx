@@ -43,6 +43,10 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   const [interviewStage, setInterviewStage] = useState('Initial Screening');
   const [userPreferences, setUserPreferences] = useState('');
 
+  // --- State for Response Suggestion ---
+  const [suggestedResponse, setSuggestedResponse] = useState<string>('');
+  const [isGeneratingResponse, setIsGeneratingResponse] = useState<boolean>(false);
+
   // --- Fetch initial settings on mount ---
   useEffect(() => {
     const fetchSettings = async () => {
@@ -122,6 +126,37 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
     onContextChange({ [name]: value });
   };
 
+  // --- Handler to Generate Response Suggestion ---
+  const handleGenerateResponse = async () => {
+    if (!transcription || isGeneratingResponse) return; // Need text, prevent double clicks
+    
+    setIsGeneratingResponse(true);
+    setSuggestedResponse(''); // Clear previous suggestion
+    
+    try {
+      const payload = {
+        question: transcription, // Use current transcription as the question
+        jobContext: jobContext,
+        resumeTextContent: resumeTextContent
+      };
+      console.log("Requesting response suggestion with payload:", payload);
+      const result = await window.electronAPI.invoke('generate-response-suggestion', payload);
+      
+      if (result && result.success && result.data) {
+        setSuggestedResponse(result.data);
+        console.log("Response Suggestion Received:", result.data);
+      } else {
+        setSuggestedResponse(`Error generating response: ${result?.error || 'Unknown error'}`);
+        console.error("Response Generation Failed:", result?.error);
+      }
+    } catch (error) {
+      setSuggestedResponse(`Error invoking response generation: ${error}`);
+      console.error("Error invoking generate-response-suggestion:", error);
+    } finally {
+      setIsGeneratingResponse(false);
+    }
+  };
+
   // --- Function that triggers the AI query needs modification ---
   const triggerAiQuery = async (detectedSpeech: string) => {
       try {
@@ -146,7 +181,7 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
 
   return (
     <>
-      <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 w-11/12 max-w-4xl bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-indigo-100 dark:border-gray-700 z-50 overflow-hidden flex flex-col max-h-[60vh]">
+      <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 w-11/12 max-w-4xl bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-indigo-100 dark:border-gray-700 z-50 overflow-hidden flex flex-col max-h-[80vh]">
         {/* Header */}
         <div className="p-3 bg-gradient-to-r from-purple-500 to-indigo-600 flex justify-between items-center flex-shrink-0">
           <div className="flex items-center space-x-2">
@@ -282,12 +317,22 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
             </div>
           </div>
 
-          {/* Right Columns: Transcription & Assistance */}
-          <div className="col-span-2 space-y-4">
-            {/* Transcription Area */}
+          {/* Right Columns: Transcription & Assistance & RESPONSE SUGGESTION */} 
+          <div className="col-span-2 space-y-3"> {/* Reduced gap slightly */} 
+            {/* Transcription Area */} 
             <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b pb-1 mb-2">Detected Speech</h4>
-              <div className="min-h-[80px] p-2 bg-gray-100 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700">
+              <div className="flex justify-between items-center mb-2">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b pb-1">Detected Speech / Question</h4>
+                {/* --- Generate Response Button --- */} 
+                <button 
+                  onClick={handleGenerateResponse}
+                  disabled={!transcription || isGeneratingResponse || isRecording || isTranscribing}
+                  className="px-2.5 py-1 text-xs font-medium rounded bg-indigo-600 hover:bg-indigo-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isGeneratingResponse ? 'Generating...' : 'Suggest Response'}
+                </button>
+              </div>
+              <div className="min-h-[60px] p-2 bg-gray-100 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700">
                 {isRecording && !transcription && (
                   <div className="flex items-center text-gray-500 dark:text-gray-400 italic text-sm">
                     <div className="animate-pulse mr-2 h-2 w-2 bg-red-500 rounded-full"></div>
@@ -316,11 +361,41 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
                 )}
               </div>
             </div>
-
-            {/* AI Assistance Area */}
+            
+            {/* --- AI Response Suggestion Area --- */}
             <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b pb-1 mb-2">AI Assistance</h4>
-               <div className="min-h-[80px] p-2 bg-indigo-50 dark:bg-indigo-900/20 rounded border border-indigo-200 dark:border-indigo-800">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b pb-1 mb-2">AI Response Suggestion</h4>
+               <div className="min-h-[80px] p-2 bg-green-50 dark:bg-green-900/20 rounded border border-green-200 dark:border-green-800">
+                {isGeneratingResponse && (
+                   <div className="flex items-center text-green-600 dark:text-green-400 italic text-sm">
+                     {/* Loading dots */}
+                      <div className="flex space-x-1 mr-2">
+                        <div className="animate-bounce h-2 w-2 bg-green-500 rounded-full" style={{ animationDelay: '0ms' }}></div>
+                        <div className="animate-bounce h-2 w-2 bg-green-500 rounded-full" style={{ animationDelay: '150ms' }}></div>
+                        <div className="animate-bounce h-2 w-2 bg-green-500 rounded-full" style={{ animationDelay: '300ms' }}></div>
+                      </div>
+                      Generating response suggestion...
+                   </div>
+                 )}
+                {!isGeneratingResponse && suggestedResponse && (
+                   <div className="text-green-900 dark:text-green-200 text-sm whitespace-pre-wrap">
+                    {/* Simple formatting for the response */} 
+                    {suggestedResponse.split('\n').map((line, index) => (
+                      <React.Fragment key={index}>{line}<br /></React.Fragment>
+                    ))}
+                  </div>
+                 )}
+                 {/* Show placeholder if idle and no response */} 
+                 {!isGeneratingResponse && !suggestedResponse && (
+                   <p className="text-green-400 dark:text-green-600 italic text-sm">Click 'Suggest Response' above after speech is detected to get AI suggestions.</p>
+                 )}
+               </div>
+            </div>
+            
+            {/* AI Assistance Area (Talking Points) - Kept for now */}
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 border-b pb-1 mb-2">AI Assistance (Talking Points)</h4>
+               <div className="min-h-[60px] p-2 bg-indigo-50 dark:bg-indigo-900/20 rounded border border-indigo-200 dark:border-indigo-800">
                 {isAssistantProcessing && (
                    <div className="flex items-center text-indigo-600 dark:text-indigo-400 italic text-sm">
                      {/* Loading dots */}

@@ -9,6 +9,7 @@ import { OpenAI } from "openai"
 import { configHelper } from "./ConfigHelper"
 import Anthropic from '@anthropic-ai/sdk';
 import FormData from 'form-data';
+import { personalityPrompts, DEFAULT_PERSONALITY } from "./ipcHandlers"; // Import constants from ipcHandlers
 
 // Safe console logging to prevent EPIPE errors
 const safeLog = (...args: any[]) => {
@@ -89,6 +90,7 @@ interface GeminiResponse {
     finishReason: string;
   }>;
 }
+
 interface AnthropicMessage {
   role: 'user' | 'assistant';
   content: Array<{
@@ -101,6 +103,14 @@ interface AnthropicMessage {
     };
   }>;
 }
+
+// Interface matching the settings structure from store.ts
+interface AiSettings {
+  personality: string;
+  interviewStage: string;
+  userPreferences: string;
+}
+
 export class ProcessingHelper {
   private deps: IProcessingHelperDeps
   private screenshotHelper: ScreenshotHelper
@@ -1637,4 +1647,244 @@ If you include code examples, use proper markdown code blocks with language spec
       return { success: false, error: errorMessage };
     }
   }
+
+  // --- Generate Response Suggestion --- 
+  public async generateResponseSuggestion(
+    question: string,
+    jobContext: any, // Consider defining a specific type later
+    resumeTextContent: string | null,
+    settings: AiSettings // Receive the full settings object
+  ): Promise<{ success: boolean, data?: string, error?: string }> {
+    safeLog(`Generating response suggestion for question: "${question}"`);
+    const config = configHelper.loadConfig();
+    const mainWindow = this.deps.getMainWindow();
+    
+    // Step 0: Validate AI Client
+    // Ensure AI client is initialized based on config.apiProvider
+    if (config.apiProvider === "openai" && !this.openaiClient) this.initializeAIClient();
+    if (config.apiProvider === "gemini" && !this.geminiApiKey) this.initializeAIClient();
+    if (config.apiProvider === "anthropic" && !this.anthropicClient) this.initializeAIClient();
+
+    if ((config.apiProvider === "openai" && !this.openaiClient) || 
+        (config.apiProvider === "gemini" && !this.geminiApiKey) || 
+        (config.apiProvider === "anthropic" && !this.anthropicClient)) {
+      safeError("AI client not initialized for response suggestion");
+      mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+      return { success: false, error: `API key for ${config.apiProvider} not configured or invalid.` };
+    }
+
+    let questionType = 'General'; // Default classification
+
+    try {
+      // --- Step 1: Classify the Question Type --- 
+      safeLog("Step 1: Classifying question type...");
+      const classificationPrompt = `Classify the following interview question into ONE of these categories: Technical-Coding, Technical-Troubleshooting, Technical-Infrastructure, Technical-Learning, Behavioral-Collaboration, Behavioral-Leadership, Behavioral-Adaptability, Behavioral-ProblemSolving, CompanyFit-Motivation, CompanyFit-Goals, CompanyFit-Culture, General. Question: "${question}" Category:`;
+      
+      // --- Force faster models for classification --- 
+      const classificationModel = 
+        config.apiProvider === 'openai' ? 'gpt-3.5-turbo' : 
+        (config.apiProvider === 'gemini' ? 'gemini-1.5-flash' : 
+        'claude-3-haiku-20240307'); // Ignore config.solutionModel here
+      safeLog(`Using classification model: ${classificationModel}`);
+      // --- End force faster models ---
+      
+      let classificationResult = '';
+
+      try {
+        if (config.apiProvider === "openai") {
+          const completion = await this.openaiClient!.chat.completions.create({
+            model: classificationModel, 
+            messages: [{ role: "user", content: classificationPrompt }],
+            max_tokens: 20,
+            temperature: 0.1,
+          });
+          classificationResult = completion.choices[0].message.content?.trim() || 'General';
+        } else if (config.apiProvider === "gemini") {
+          const geminiMessages: GeminiMessage[] = [{ role: "user", parts: [{ text: classificationPrompt }] }];
+          const response = await axios.default.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${classificationModel}:generateContent?key=${this.geminiApiKey}`,
+            { contents: geminiMessages, generationConfig: { temperature: 0.1, maxOutputTokens: 20 } }
+          );
+          const responseData = response.data as GeminiResponse;
+          classificationResult = responseData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'General';
+        } else if (config.apiProvider === "anthropic") {
+          const response = await this.anthropicClient!.messages.create({
+            model: classificationModel,
+            max_tokens: 20,
+            messages: [{ role: "user", content: classificationPrompt }],
+            temperature: 0.1,
+          });
+          classificationResult = (response.content[0] as { type: 'text', text: string }).text?.trim() || 'General';
+        }
+        
+        // Basic validation of classification result
+        const validCategories = ['Technical-Coding', 'Technical-Troubleshooting', 'Technical-Infrastructure', 'Technical-Learning', 'Behavioral-Collaboration', 'Behavioral-Leadership', 'Behavioral-Adaptability', 'Behavioral-ProblemSolving', 'CompanyFit-Motivation', 'CompanyFit-Goals', 'CompanyFit-Culture', 'General'];
+        if (validCategories.includes(classificationResult)) {
+          questionType = classificationResult;
+        } else {
+          safeWarn(`Unexpected classification result: "${classificationResult}". Defaulting to General.`);
+          questionType = 'General';
+        }
+        safeLog(`Question classified as: ${questionType}`);
+
+      } catch (classError: any) {
+         safeError("Error during question classification:", classError.message);
+         // Continue with default type 'General' if classification fails
+         questionType = 'General';
+         safeLog("Proceeding with default classification 'General' due to error.");
+      }
+
+      // --- Step 2: Generate the Tailored Response --- 
+      safeLog("Step 2: Generating tailored response...");
+      
+      // 2a. Construct Context String
+      let contextString = 'Relevant Context:\n';
+      if (jobContext?.jobTitle) contextString += `- Job Title: ${jobContext.jobTitle}\n`;
+      if (jobContext?.keySkills) contextString += `- Key Skills for Role: ${jobContext.keySkills}\n`;
+      if (jobContext?.companyMission) contextString += `- Company Mission/Values: ${jobContext.companyMission}\n`;
+      if (settings.interviewStage) contextString += `- Interview Stage: ${settings.interviewStage}\n`;
+      if (settings.userPreferences) contextString += `- User Preferences for Response: ${settings.userPreferences}\n`;
+      if (resumeTextContent) {
+        const summary = resumeTextContent.substring(0, 500); // Limit resume context
+        contextString += `- User Resume Summary: ${summary}...\n`;
+      }
+      if (contextString === 'Relevant Context:\n') {
+         contextString = 'No specific context provided.'; 
+      }
+      
+      // 2b. Get Base System Prompt (Personality)
+      const baseSystemPrompt = personalityPrompts[settings.personality] || personalityPrompts[DEFAULT_PERSONALITY];
+      
+      // 2c. **REVISED** Construct the Main Prompt for Response Generation
+      let specificInstructions = '';
+      switch (questionType) {
+        case 'Technical-Coding':
+          specificInstructions = `Provide clean, efficient code examples in the relevant language (${configHelper.loadConfig().language || 'the requested language'}). Explain the logic, data structures, and algorithms used. Discuss edge cases and potential optimizations. Reference relevant Key Skills from the context if applicable.`;
+          break;
+        case 'Technical-Troubleshooting':
+          specificInstructions = 'Outline a systematic troubleshooting process. Ask clarifying questions if needed. Propose specific diagnostic steps, tools, or commands. Explain the reasoning behind your proposed solutions based on the likely root cause.';
+          break;
+        case 'Technical-Infrastructure':
+        case 'System Design': // Add a potential classification for system design
+          specificInstructions = `Design a potential solution or architecture. Describe the key components, technologies, and data flow. Justify your choices, discussing trade-offs (scalability, cost, reliability, security). Use markdown or Mermaid syntax for diagrams if possible, otherwise describe connections clearly. Relate the design to the Key Skills or Resume Summary if relevant.`;
+          break;
+        case 'Technical-Learning':
+          specificInstructions = 'Demonstrate your learning process. Mention specific resources, projects, or experiences. Connect your learning to the Key Skills required for the role and show enthusiasm for continuous improvement.';
+          break;
+        case 'Behavioral-Collaboration':
+        case 'Behavioral-Leadership':
+        case 'Behavioral-Adaptability':
+        case 'Behavioral-ProblemSolving':
+          specificInstructions = `Structure your response using the STAR method (Situation, Task, Action, Result). Be specific and provide concrete examples. Where relevant, subtly incorporate technical skills or project details from the Resume Summary or Key Skills provided in the context to make the example more impactful and relevant to the role.`;
+          break;
+        case 'CompanyFit-Motivation':
+        case 'CompanyFit-Goals':
+        case 'CompanyFit-Culture':
+          specificInstructions = `Directly address the question, aligning your motivations, goals, or values with the Company Mission/Values and the Job Title/Key Skills provided in the context. Show genuine interest and research. Connect your Resume Summary to the role's requirements.`;
+          break;
+        default: // General
+          specificInstructions = 'Provide a clear, concise, and professional answer relevant to the question.';
+      }
+
+      const mainPrompt = `You are an expert interview response generator. 
+      
+      INTERVIEW QUESTION: "${question}"
+      QUESTION TYPE: ${questionType}
+      
+      ${contextString.trim()}
+      
+      SPECIFIC INSTRUCTIONS based on Question Type:
+      ${specificInstructions}
+      
+      GENERAL INSTRUCTIONS:
+      - Generate a high-quality, well-researched, and specific response.
+      - DO NOT give generic advice or placeholder answers.
+      - Leverage the Relevant Context provided.
+      - Adhere to the User Preferences for Response regarding tone and focus.
+      - Ensure the response is professional and suitable for the specified Interview Stage.
+      
+      Generated Response:`;
+      
+      // 2d. Make the API call using the main configured model
+      const responseModel = config.solutionModel || 
+        (config.apiProvider === 'openai' ? 'gpt-4o' : 
+        (config.apiProvider === 'gemini' ? 'gemini-1.5-pro-latest' : 
+        'claude-3-opus-20240229')); 
+      safeLog(`Using response generation model: ${responseModel}`);
+      
+      let responseText: string | undefined;
+      const maxResponseTokens = 1500; 
+
+      // --- Start API Call Try Block ---
+      try { 
+        if (config.apiProvider === "openai") {
+          const completion = await this.openaiClient!.chat.completions.create({
+            model: responseModel,
+            messages: [
+              { role: "system", content: baseSystemPrompt }, 
+              { role: "user", content: mainPrompt } 
+            ],
+            max_tokens: maxResponseTokens,
+            temperature: 0.5, 
+          });
+          responseText = completion.choices[0].message.content;
+        } else if (config.apiProvider === "gemini") {
+          const geminiMessages: GeminiMessage[] = [
+            { role: "user", parts: [{ text: `${baseSystemPrompt}\n\n${mainPrompt}` }] }
+          ];
+          const response = await axios.default.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${responseModel}:generateContent?key=${this.geminiApiKey}`,
+            { 
+              contents: geminiMessages, 
+              generationConfig: { temperature: 0.5, maxOutputTokens: maxResponseTokens } 
+            }
+          );
+          const responseData = response.data as GeminiResponse;
+          responseText = responseData.candidates?.[0]?.content?.parts?.[0]?.text;
+        } else if (config.apiProvider === "anthropic") {
+          const response = await this.anthropicClient!.messages.create({
+            model: responseModel,
+            max_tokens: maxResponseTokens,
+            messages: [{ role: "user", content: mainPrompt }],
+            system: baseSystemPrompt, 
+            temperature: 0.5,
+          });
+          responseText = (response.content[0] as { type: 'text', text: string }).text;
+        }
+      } catch (apiError: any) {
+          // Handle API call specific errors cleanly within this inner try-catch
+          safeError('Error during specific API call for response generation:', apiError);
+          // Re-throw the error to be caught by the outer try-catch which handles generic messaging
+          throw apiError; 
+      }
+       // --- End API Call Try Block ---
+
+      if (responseText) {
+        safeLog(`Response suggestion generated successfully. Length: ${responseText.length}`);
+        return { success: true, data: responseText.trim() };
+      } else {
+        throw new Error("No response content received from AI provider for suggestion.");
+      }
+
+    } catch (error: any) { // Outer catch for overall process errors (like classification failure, or re-thrown API errors)
+      safeError('Error generating response suggestion:', error);
+      let errorMessage = "An unknown error occurred generating the response suggestion.";
+      // Add specific error handling like in handleSimpleQuery
+      if (error.response) { 
+        errorMessage = `API Error (${error.response.status}): ${error.response.data?.error?.message || error.message}`;
+      } else if (error.status) { 
+         errorMessage = `API Error (${error.status}): ${error.message}`;
+      } else if (error.message) {
+         errorMessage = error.message;
+      }
+      if (error.status === 401 || error?.response?.status === 401) {
+         errorMessage = "Invalid API Key. Please check settings.";
+         mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
+      } else if (error.status === 429 || error?.response?.status === 429) {
+         errorMessage = "API Rate Limit Exceeded or insufficient quota. Please try again later.";
+      }
+      return { success: false, error: errorMessage };
+    }
+  }
+  // --- End Generate Response Suggestion --- 
 }
