@@ -249,73 +249,47 @@ function App() {
                   const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
                   console.log(`Final audio blob: size=${audioBlob.size} bytes, type=${audioBlob.type}`);
                   showToast("Transcribing", "Converting final speech to text...", "neutral");
-                  setIsTranscribing(true); // Ensure transcribing state is true for the final process
+                  setIsTranscribing(true);
 
                   let transcriptionText = '';
-                  // --- Keep the existing try/catch logic for Google/Whisper fallback ---
+                  // --- Remove the explicit Google transcription attempt ---
+                  // The streaming service in ProcessingHelper should handle this.
+                  // We'll rely solely on Whisper for the final blob transcription here if needed,
+                  // or assume the streaming service already provided the final result elsewhere.
                   try {
-                    // Try Google Speech first if selected
-                    if (speechService === 'google' && googleSpeechRef.current) {
-                      console.log("Attempting FINAL transcription with Google Speech API...");
-                      // Use transcribeAudio which handles chunking if necessary
-                      transcriptionText = await googleSpeechRef.current.transcribeAudio(audioBlob);
-                      console.log("Google FINAL transcription successful.");
-                       if (transcriptionText) {
-                          console.log("Final transcription obtained via Google.");
-                       }
-                    } else {
-                      // If Google isn't selected, use Whisper directly
+                      // If Google Speech isn't used, or as a fallback, use Whisper
                       console.log("Using Whisper API for FINAL transcription...");
                       const result = await processAudioWithWhisper(audioChunksRef.current); // Pass chunks to helper
                       transcriptionText = result?.text || '';
                       console.log("Whisper FINAL transcription successful.");
                       if (transcriptionText) {
-                        console.log("Final transcription obtained via Whisper (primary).");
-                      }
-                    }
-                  } catch (googleError) {
-                    // If Google Speech API failed, fall back to Whisper
-                    console.error("Google Speech API FINAL failed:", googleError);
-                    console.log("Falling back to Whisper API for FINAL transcription...");
-                    showToast("Info", "Google Speech failed, falling back to Whisper...", "neutral");
-                    try {
-                      const result = await processAudioWithWhisper(audioChunksRef.current); // Pass chunks
-                      transcriptionText = result?.text || '';
-                      console.log("Whisper FINAL fallback transcription successful.");
-                      if (transcriptionText) {
-                        console.log("Final transcription obtained via Whisper (fallback).");
+                        console.log("Final transcription obtained via Whisper.");
                       }
                     } catch (whisperError) {
-                      // Handle error if Whisper fallback also fails
-                      console.error("Whisper FINAL fallback failed:", whisperError);
-                      console.log("FINAL transcription failed using both Google and Whisper.");
+                      console.error("Whisper FINAL transcription failed:", whisperError);
                       throw whisperError; // Re-throw to be caught by the outer catch
                     }
-                  }
-                  // --- End of Google/Whisper fallback logic ---
+                  // --- End of modified transcription logic ---
 
-                  // Update transcription state AFTER attempting Google and potentially Whisper
-                  setCurrentTranscription(transcriptionText); // Display final result
-                  setIsTranscribing(false); // Mark final transcription as complete
+                  setCurrentTranscription(transcriptionText);
+                  setIsTranscribing(false);
 
                   if (transcriptionText) {
                     showToast("Transcription Complete", "Your speech has been converted to text", "success");
                   } else {
-                     // It's possible to have no transcription if only silence was recorded
                      console.log("Final transcription resulted in empty text.");
                      showToast("Transcription Complete", "No speech detected in the recording.", "neutral");
-                     // Optionally clear transcription panel: setCurrentTranscription('');
                   }
               } catch (error) {
                   console.error("Error in final audio processing:", error);
                   showToast("Transcription Failed", error instanceof Error ? error.message : "Failed to transcribe final audio", "error");
-                  setIsTranscribing(false); // Ensure state is reset on error
-                  setCurrentTranscription(''); // Clear transcription on error
+                  setIsTranscribing(false);
+                  setCurrentTranscription('');
               }
           } else {
              console.log("No audio chunks recorded for final processing.");
-             setIsTranscribing(false); // No data, so not transcribing
-             setCurrentTranscription(''); // Clear any previous partial transcription
+             setIsTranscribing(false);
+             setCurrentTranscription('');
           }
       };
 
@@ -340,50 +314,13 @@ function App() {
           vadSpeakingRef.current = false;
           speechAudioBufferRef.current = [];
 
-          if (speechService !== 'google' || !googleSpeechRef.current) {
-             console.log("VAD: Speech ended, but not using Google for partial transcription.");
-             return;
-          }
-
-          const sampleRate = 16000; 
-          const speechBlob = await pcmToWavBlob(audio, sampleRate);
-
-          if (speechBlob.size > 1000) {
-             console.log(`VAD: Sending speech segment to Google: Size=${(speechBlob.size / 1024).toFixed(1)}KB`);
-             // Keep isTranscribing true while partial transcription happens
-             // setIsTranscribing(true); // Already managed elsewhere if needed?
-
-             let partialTranscriptionResult: string | null = null;
-             try {
-                 partialTranscriptionResult = await googleSpeechRef.current.transcribePartialAudio(speechBlob);
-                 
-                 // Check if transcription is a non-empty string before proceeding
-                 if (typeof partialTranscriptionResult === 'string' && partialTranscriptionResult.trim().length > 0) { 
-                     const confirmedTranscription = partialTranscriptionResult; // Assign to new const in this scope
-                     console.log(`VAD: Google partial transcription: "${confirmedTranscription.substring(0, 30)}${confirmedTranscription.length > 30 ? '...' : ''}"`);
-                     setCurrentTranscription(prev => (prev ? prev + " " + confirmedTranscription : confirmedTranscription).trim());
+          // --- Remove Google partial transcription logic ---
+          // This is now handled by ProcessingHelper's streaming flow.
+          // The VAD here might still be useful for non-Google services or UI feedback.
+          console.log("VAD: Speech ended (Google partial transcription logic removed).");
                      
-                     // --- TRIGGER LIVE ASSISTANCE --- 
-                     if (isLiveAssistantActive) {
-                         handleGenerateLiveAssistance(confirmedTranscription); // Use the confirmed transcription
-                     }
-                     // --- END TRIGGER --- 
-
-                 } else {
-                     console.log("VAD: Google partial transcription returned empty.");
-                 }
-             } catch (error) {
-                 console.error("VAD: Error in Google partial transcription:", error);
-             } finally {
-                 // Set transcribing false *if* VAD isn't currently detecting speech?
-                 // This logic might need review depending on how isTranscribing is used elsewhere.
-                 // if (!vadSpeakingRef.current) {
-                 //    setIsTranscribing(false);
-                 // }
-            }
-          } else {
-             console.log("VAD: Speech segment too small to send for partial transcription.");
-          }
+          // Optionally, trigger Whisper transcription here if speechService !== 'google'
+          // if (speechService === 'whisper') { ... process audio chunk ... }
         },
         // Optional: Collect raw audio frames while speaking
         // onFrameProcessed: (frame) => {
@@ -421,7 +358,7 @@ function App() {
        }
        setMediaRecorder(null);
     }
-  }, [showToast, speechService, isRecording, vad, mediaRecorder, isLiveAssistantActive]); // Added dependencies
+  }, [showToast, speechService, isRecording, vad, mediaRecorder, isLiveAssistantActive]); // Removed handleGenerateLiveAssistance dependency
 
 
   // Modified stopRecording with VAD cleanup
@@ -910,7 +847,7 @@ Provide only the key talking points/keywords as bullet points, without any intro
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <ToastContext.Provider value={{ showToast }}>
-          <div className="relative">
+          <div className="relative bg-transparent">
             {isInitialized ? (
               hasApiKey ? (
                 <SubscribedApp
@@ -960,18 +897,14 @@ Provide only the key talking points/keywords as bullet points, without any intro
           {/* Live Assistant Panel - Rendered based on state */}
           {isLiveAssistantActive && (
             <VoiceTranscriptionPanel
-              isRecording={isRecording} // Pass independent recording state
-              transcription={currentTranscription} // Pass transcription
-              isTranscribing={isTranscribing} // Pass transcribing state
-              speechService={speechService} // Pass speech service
-              generatedAssistance={generatedInterviewAnswer} // Pass assistance text
-              isAssistantProcessing={isAssistantProcessing} // Pass loading state
-              jobContext={interviewContext} // Pass job context
-              resumeFileName={resumeFileName} // Pass resume filename
-              onResumeUpload={handleResumeUpload} // Pass upload handler
-              onContextChange={handleContextChange} // Pass context change handler
-              onToggleMicrophone={toggleMicrophone} // Pass mic toggle function
-              onClose={deactivateLiveAssistant} // Pass panel close/deactivation function
+              speechService={speechService}
+              generatedAssistance={generatedInterviewAnswer}
+              isAssistantProcessing={isAssistantProcessing}
+              jobContext={interviewContext}
+              resumeFileName={resumeFileName}
+              onResumeUpload={handleResumeUpload}
+              onContextChange={handleContextChange}
+              onClose={deactivateLiveAssistant}
             />
           )}
           

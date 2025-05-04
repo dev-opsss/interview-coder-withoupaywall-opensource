@@ -1,572 +1,605 @@
+import { Buffer } from 'buffer';
 import axios from 'axios';
+import { safeLog, safeError } from '../../electron/main'; // Adjust path as needed
 
-// Define interfaces for Google Speech API response
-interface GoogleSpeechAlternative {
+interface SpeechRecognitionResult {
+  alternatives: {
   transcript: string;
-  confidence?: number;
-}
-
-interface GoogleSpeechResult {
-  alternatives: GoogleSpeechAlternative[];
-  isFinal?: boolean;
-}
-
-// This interface is now used for proper typing
-interface GoogleSpeechResponse {
-  results: GoogleSpeechResult[];
+    confidence: number;
+  }[];
+  isFinal: boolean;
 }
 
 export class GoogleSpeechService {
-  private apiKey: string | null = null;
-  private googleApiEndpoint = 'https://speech.googleapis.com/v1/speech:recognize';
+  private apiKey: string;
+  private language: string;
+  private audioChunks: Uint8Array[] = [];
+  private totalBytesProcessed = 0;
+  private streamingActive = false;
+  private transcriptionCallback: ((text: string, isFinal: boolean) => void) | null = null;
 
-  // Generate a short unique ID for tracking requests
-  private generateUniqueId(): string {
-    return Math.random().toString(36).substring(2, 8);
-  }
-
-  // Convert Blob to Base64 string
-  private async blobToBase64(blob: Blob): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = typeof reader.result === 'string' 
-          ? reader.result.split(',')[1] 
-          : '';
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  // Convert WebM audio to WAV/LINEAR16 format using Web Audio API
-  async convertAudioForGoogleApi(audioBlob: Blob): Promise<Blob> {
-    try {
-      console.log(`Converting audio: size=${(audioBlob.size / 1024).toFixed(1)}KB, type=${audioBlob.type}`);
-      
-      // Create audio context
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      
-      // Read the blob into an ArrayBuffer
-      const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as ArrayBuffer);
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(audioBlob);
-      });
-      
-      // Decode the audio data
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      console.log(`Decoded audio: duration=${audioBuffer.duration}s, channels=${audioBuffer.numberOfChannels}, sample rate=${audioBuffer.sampleRate}Hz`);
-      
-      // Convert to LINEAR16 WAV format (16-bit PCM)
-      const wavBlob = await this.audioBufferToWav(audioBuffer);
-      console.log(`Converted to WAV: size=${(wavBlob.size / 1024).toFixed(1)}KB`);
-      
-      return wavBlob;
-    } catch (error) {
-      console.error(`Error converting audio for Google API:`, error);
-      // If conversion fails, return original blob
-      return audioBlob;
-    }
-  }
-  
-  // Convert AudioBuffer to WAV format
-  async audioBufferToWav(inputBuffer: AudioBuffer): Promise<Blob> {
-    // We'll downsample to 16000Hz for Google Speech API
-    const targetSampleRate = 16000;
-    
-    // Resample if needed
-    let audioData: AudioBuffer;
-    if (inputBuffer.sampleRate !== targetSampleRate) {
-      audioData = await this.resampleAudio(inputBuffer, targetSampleRate);
-    } else {
-      audioData = inputBuffer;
-    }
-    
-    // Get the raw PCM data
-    const numOfChannels = 1; // Convert to mono
-    const length = audioData.length * numOfChannels * 2; // 2 bytes per sample for 16-bit
-    const sampleRate = targetSampleRate;
-    
-    // Create the WAV header
-    const wavBuffer = new ArrayBuffer(44 + length);
-    const view = new DataView(wavBuffer);
-    
-    // Write WAV header (RIFF format)
-    this.writeString(view, 0, 'RIFF');              // RIFF header
-    view.setUint32(4, 36 + length, true);           // File size
-    this.writeString(view, 8, 'WAVE');              // WAVE format
-    this.writeString(view, 12, 'fmt ');             // Format chunk identifier
-    view.setUint32(16, 16, true);                   // Format chunk length
-    view.setUint16(20, 1, true);                    // PCM format (1)
-    view.setUint16(22, numOfChannels, true);        // Number of channels
-    view.setUint32(24, sampleRate, true);           // Sample rate
-    view.setUint32(28, sampleRate * numOfChannels * 2, true); // Byte rate
-    view.setUint16(32, numOfChannels * 2, true);    // Block align
-    view.setUint16(34, 16, true);                   // Bits per sample
-    this.writeString(view, 36, 'data');             // Data chunk identifier
-    view.setUint32(40, length, true);               // Data chunk length
-    
-    // Get mono channel data
-    let offset = 44;
-    const channelData = this.convertToMono(audioData);
-    
-    // Write audio data as 16-bit PCM
-    for (let i = 0; i < channelData.length; i++) {
-      // Convert to 16-bit sample (-32768 to 32767)
-      const sample = Math.max(-1, Math.min(1, channelData[i]));
-      const value = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-      view.setInt16(offset, value, true);
-      offset += 2;
-    }
-    
-    return new Blob([wavBuffer], { type: 'audio/wav' });
-  }
-  
-  // Helper function to write strings to DataView
-  writeString(view: DataView, offset: number, string: string): void {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  }
-  
-  // Convert AudioBuffer to mono channel
-  convertToMono(input: AudioBuffer): Float32Array {
-    const channels = input.numberOfChannels;
-    const samples = input.length;
-    const monoData = new Float32Array(samples);
-    
-    // Mix all channels to mono
-    for (let i = 0; i < samples; i++) {
-      let sum = 0;
-      for (let channel = 0; channel < channels; channel++) {
-        sum += input.getChannelData(channel)[i];
-      }
-      monoData[i] = sum / channels;
-    }
-    
-    return monoData;
-  }
-  
-  // Resample audio to target sample rate
-  async resampleAudio(audioBuffer: AudioBuffer, targetSampleRate: number): Promise<AudioBuffer> {
-    const channels = audioBuffer.numberOfChannels;
-    const originalSampleRate = audioBuffer.sampleRate;
-    const ratio = targetSampleRate / originalSampleRate;
-    const newLength = Math.round(audioBuffer.length * ratio);
-    
-    // Create off-screen canvas for OfflineAudioContext
-    const offlineCtx = new OfflineAudioContext(channels, newLength, targetSampleRate);
-    
-    // Create buffer source
-    const source = offlineCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(offlineCtx.destination);
-    source.start(0);
-    
-    // Process and return the resampled buffer
-    return await offlineCtx.startRendering();
-  }
-
-  setApiKey(apiKey: string): void {
-    // Mask part of the API key for logging (show only first 5 chars)
-    const maskedKey = apiKey.substring(0, 5) + '...' + apiKey.substring(apiKey.length - 4);
-    console.log(`Google Speech API key set: ${maskedKey}`);
+  constructor(apiKey: string = '', language: string = 'en-US') {
     this.apiKey = apiKey;
-    
-    // Test the API key
-    this.testApiKey().then(isValid => {
-      if (isValid) {
-        console.log('Google Speech API key is valid and properly configured.');
-      } else {
-        console.error('Google Speech API key validation failed. Check your API key and permissions.');
-      }
-    });
+    this.language = language;
   }
 
-  async transcribeAudio(audioBlob: Blob): Promise<string> {
-    if (!this.apiKey) {
-      throw new Error('Google Speech API key not set');
-    }
+  /**
+   * Set the API key for the service
+   * @param apiKey Google Speech API key
+   */
+  public setApiKey(apiKey: string): void {
+    this.apiKey = apiKey;
+  }
 
-    // Log the masked API key and request size
-    const maskedKey = this.maskApiKey(this.apiKey);
-    console.log(`Using Google Speech API for transcription with key: ${maskedKey}`);
+  // Add audio chunk to the buffer
+  public addAudioChunk(audioData: Uint8Array): void {
+    this.audioChunks.push(audioData);
+    this.totalBytesProcessed += audioData.length;
+  }
 
+  // Clear audio buffer
+  public clearAudioBuffer(): void {
+    this.audioChunks = [];
+    this.totalBytesProcessed = 0;
+  }
+  
+  // Test if the API key is valid
+  public async testApiKey(): Promise<boolean> {
     try {
-      // Check if audio is too large for synchronous API (>60 seconds/~500KB)
-      if (audioBlob.size > 500000) {
-        console.log(`Audio size (${Math.round(audioBlob.size/1024)} KB) exceeds recommended limit for sync API`);
-        console.log(`Splitting audio into smaller chunks for processing...`);
-        
-        // Split into smaller chunks for processing
-        return await this.processLargeAudioInChunks(audioBlob);
+      console.log('Testing Google Speech API key validity');
+      
+      if (!this.apiKey || this.apiKey.trim() === '') {
+        console.error('Cannot test API key: Key is empty');
+        return false;
       }
       
-      // For smaller audio, process normally
-      const buffer = await audioBlob.arrayBuffer();
-      const base64Audio = this.arrayBufferToBase64(buffer);
+      // Create a small audio buffer for testing
+      const testBuffer = new Uint8Array(100).fill(0);
+      const base64Audio = Buffer.from(testBuffer).toString('base64');
 
-      // Prepare request body for REST API
-      const requestData = {
+      console.log('Sending test request to Google Speech API');
+      
+      // Use a simpler configuration for the test
+      const testRequestData = {
         config: {
-          encoding: 'WEBM_OPUS',
-          sampleRateHertz: 48000,
-          languageCode: 'en-US',
-          model: 'default',
+          encoding: 'LINEAR16',
+          sampleRateHertz: 16000,
+          languageCode: 'en-US', // Hard-code en-US for testing
+          model: 'command_and_search',
+        },
+        audio: {
+          content: base64Audio,
+        },
+      };
+    
+      // Use a shorter timeout for testing
+      const response = await axios.post(
+        `https://speech.googleapis.com/v1/speech:recognize?key=${this.apiKey}`,
+        testRequestData,
+        { timeout: 5000 }
+      );
+
+      console.log(`Google Speech API test response status: ${response.status}`);
+      
+      // Even if we don't get results (since our test audio is just zeros),
+      // a 200 response means the API key is valid
+      return response.status === 200;
+    } catch (error: any) {
+      console.error('Error testing Google Speech API key:', error.message);
+      
+      // Log additional details if available
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', JSON.stringify(error.response.data || {}).substring(0, 500));
+    
+        // Check if error is related to invalid API key
+        if (error.response.status === 400 && 
+            (error.response.data?.error?.status === 'INVALID_ARGUMENT' || 
+             error.response.data?.error?.message?.includes('Invalid audio'))) {
+          console.log('API key might be valid but audio format is incorrect - this is expected in testing');
+          return true; // If we get an error about the audio format, the API key is likely valid
+        }
+        
+        if (error.response.status === 403) {
+          console.error('API key is likely invalid or doesn\'t have proper permissions');
+          return false;
+        }
+      }
+      
+      // Network or other errors mean we can't validate
+      if (error.code === 'ECONNABORTED') {
+        console.error('Request timed out - network issues or API not responding');
+      }
+      
+      return false;
+    }
+  }
+
+  // Process partial audio for real-time feedback
+  public async transcribePartialAudio(): Promise<string> {
+    if (this.audioChunks.length === 0) {
+      return '';
+    }
+
+    try {
+      // Concat all chunks into a single audio buffer
+      const audioBuffer = this.concatAudioChunks();
+      const base64Audio = Buffer.from(audioBuffer).toString('base64');
+
+      const response = await axios.post(
+        `https://speech.googleapis.com/v1/speech:recognize?key=${this.apiKey}`,
+        {
+        config: {
+            encoding: 'LINEAR16',
+            sampleRateHertz: 16000,
+            languageCode: this.language,
+            model: 'command_and_search', // Use a faster model for real-time
           enableAutomaticPunctuation: true,
         },
         audio: {
-          content: base64Audio
-        }
-      };
-
-      console.log(`Sending audio to Google Speech API (audio size: ${Math.round(buffer.byteLength/1024)} KB)`);
-
-      // Construct the URL with the API key properly embedded
-      const apiUrl = `${this.googleApiEndpoint}?key=${encodeURIComponent(this.apiKey)}`;
-      
-      // Make request to Google Speech API
-      const response = await axios.post<GoogleSpeechResponse>(
-        apiUrl, 
-        requestData,
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          }
+            content: base64Audio,
+          },
         }
       );
 
-      // Extract transcription text
-      const transcription = response.data.results
-        ?.map((result: GoogleSpeechResult) => result.alternatives[0].transcript)
-        .join(' ') || '';
-
-      return transcription;
-    } catch (error) {
-      console.error('Google Speech API error:', error);
-      if (axios.isAxiosError(error) && error.response) {
-        const errorData = error.response.data;
-        const errorMsg = errorData?.error?.message || error.message;
-        
-        // If this is an API key issue, provide clearer error
-        if (errorMsg.includes('API Key not found') || errorMsg.includes('API_KEY_INVALID')) {
-          console.error('API KEY ERROR: Your Google Speech API key is invalid or not properly configured.');
-          console.error('Make sure you have enabled the Speech-to-Text API in your Google Cloud Console.');
-          throw new Error('Google Speech API key is invalid or not properly configured');
-        }
-        
-        // If the error is "input too long," try processing in chunks
-        if (errorMsg.includes('too long') || errorMsg.includes('LongRunningRecognize')) {
-          console.log('Audio too long for sync API - trying to process in chunks');
-          return await this.processLargeAudioInChunks(audioBlob);
-        }
-        
-        throw new Error(`Google Speech API error: ${errorMsg}`);
+      if (
+        response.data &&
+        response.data.results &&
+        response.data.results.length > 0
+      ) {
+        return response.data.results[0].alternatives[0].transcript;
       }
-      throw error;
+
+      return '';
+    } catch (error) {
+      console.error('Error transcribing partial audio:', error);
+      return '';
     }
   }
 
-  // Add a specialized method for partial/streaming transcription
-  async transcribePartialAudio(audioBlob: Blob): Promise<string | null> {
+  // Process complete audio for final transcription
+  public async transcribeAudio(mimeType: string = 'audio/mpeg'): Promise<string | { text: string, words: { word: string, startTime: number, endTime: number }[] }> {
+    if (this.audioChunks.length === 0) {
+      console.error('No audio chunks available for transcription');
+      return '';
+    }
+
     try {
-      const requestId = this.generateUniqueId();
-      console.log(`[${requestId}] Starting transcription with Google Speech API`);
-      console.log(`[${requestId}] Audio info: size=${(audioBlob.size / 1024).toFixed(1)}KB, type=${audioBlob.type}`);
+      const audioBuffer = this.concatAudioChunks();
+      console.log(`Transcribing audio with ${audioBuffer.length} bytes, MIME type: ${mimeType}`);
       
-      // Check if we have audio data
-      if (!audioBlob || audioBlob.size === 0) {
-        console.warn(`[${requestId}] Empty audio blob received, skipping transcription`);
-        return null;
+      // For larger audio files, we should split and process in chunks
+      if (audioBuffer.length > 1_000_000) { // ~ 1MB
+        console.log('Large audio file detected, processing in chunks');
+        return this.processLargeAudioInChunks(audioBuffer, mimeType);
       }
       
-      if (!this.apiKey) {
-        console.error(`[${requestId}] Google Speech API key is not set`);
-        return null;
+      if (!this.apiKey || this.apiKey.trim() === '') {
+        console.error('Google Speech API key is missing or empty');
+        throw new Error('Google Speech API key not configured');
       }
 
-      // Debug log the API key (masked for security)
-      const maskedKey = this.maskApiKey(this.apiKey);
-      console.log(`[${requestId}] Using Google Speech API key: ${maskedKey}`);
+      const base64Audio = Buffer.from(audioBuffer).toString('base64');
+      console.log(`Audio converted to base64, sending to Google Speech API (length: ${base64Audio.length})`);
       
-      // Convert audio format if needed
-      const processedAudio = await this.convertAudioForGoogleApi(audioBlob);
-      console.log(`[${requestId}] Processed audio: size=${(processedAudio.size / 1024).toFixed(1)}KB, type=${processedAudio.type}`);
+      // Log the first few bytes of the audio for debugging
+      const previewBytes = Array.from(audioBuffer.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      console.log(`Audio data preview (first 20 bytes): ${previewBytes}`);
       
-      // Convert audio to base64
-      const base64Audio = await this.blobToBase64(processedAudio);
-      console.log(`[${requestId}] Converted audio to base64, length: ${base64Audio.length}`);
+      // --- Determine encoding and sample rate based on MIME type --- 
+      let encoding: string;
+      let sampleRateHertz: number;
       
-      // Prepare the request data
+      if (mimeType.includes('webm') && mimeType.includes('opus')) {
+        encoding = 'WEBM_OPUS';
+        sampleRateHertz = 48000; // Opus typically uses 48kHz
+        console.log(`Detected WEBM_OPUS format, using encoding: ${encoding}, sampleRate: ${sampleRateHertz}Hz`);
+      } else if (mimeType.includes('wav')) {
+        encoding = 'LINEAR16'; // Assuming WAV is LINEAR16
+        // Ideally, read sample rate from WAV header, but default to 16000 for now
+        sampleRateHertz = 16000; 
+        console.log(`Detected WAV format, assuming encoding: ${encoding}, sampleRate: ${sampleRateHertz}Hz`);
+      } else {
+        // Default to LINEAR16 for other types (like audio/mpeg, etc.)
+        // This might still fail if the format is actually different
+        encoding = 'LINEAR16';
+        sampleRateHertz = 16000;
+        console.warn(`Unknown or possibly unsupported format ${mimeType}, defaulting to encoding: ${encoding}, sampleRate: ${sampleRateHertz}Hz`);
+      }
+      // --- End encoding/rate determination ---
+      
+      // Create a request with detailed configuration
       const requestData = {
         config: {
-          encoding: 'LINEAR16', // Changed from WEBM_OPUS to LINEAR16
-          sampleRateHertz: 16000,
-          languageCode: 'en-US',
-          model: 'default',
-          enableAutomaticPunctuation: true
+          encoding: encoding, // Use determined encoding
+          sampleRateHertz: sampleRateHertz, // Use determined sample rate
+          languageCode: this.language,
+          model: 'latest_long', // Use more accurate model for final transcription
+          enableAutomaticPunctuation: true,
+          audioChannelCount: 1, // Mono audio
+          enableWordTimeOffsets: true, // Enable word-level timestamps
         },
         audio: {
-          content: base64Audio
-        }
+          content: base64Audio,
+        },
       };
+
+      console.log(`Sending request to Google Speech API with language: ${this.language}`);
       
-      // Construct the URL with the API key properly embedded
-      const apiUrl = `${this.googleApiEndpoint}?key=${encodeURIComponent(this.apiKey)}`;
-      console.log(`[${requestId}] Sending request to Google Speech API at ${this.googleApiEndpoint}`);
-      
-      // Send the transcription request
-      const response = await axios.post<GoogleSpeechResponse>(
-        apiUrl,
-        requestData,
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          }
+      try {
+        const response = await axios.post(
+          `https://speech.googleapis.com/v1/speech:recognize?key=${this.apiKey}`,
+          requestData
+        );
+  
+        console.log(`Google Speech API response status: ${response.status}`);
+        
+        if (response.status !== 200) {
+          console.error('Non-200 response from Google Speech API:', response.status, response.statusText);
+          throw new Error(`API error: ${response.status} ${response.statusText}`);
         }
-      );
-      
-      if (response.data && response.data.results && response.data.results.length > 0) {
-        const transcript = response.data.results
-          .map((result: GoogleSpeechResult) => result.alternatives[0].transcript)
+  
+        console.log('Google Speech API response data:', JSON.stringify(response.data || {}).substring(0, 200) + '...');
+        
+        // Check for missing or empty results
+        if (!response.data || !response.data.results || response.data.results.length === 0) {
+          console.warn('Google Speech API returned no results. Audio might be silent or unclear.');
+          return '';
+        }
+  
+        // Check if the first result has alternatives
+        if (!response.data.results[0].alternatives || response.data.results[0].alternatives.length === 0) {
+          console.warn('Google Speech API returned a result but no transcript alternatives.');
+          return '';
+        }
+  
+        // Combine all transcriptions for the text
+        const transcription = response.data.results
+          .map((result: any) => {
+            if (result.alternatives && result.alternatives[0] && result.alternatives[0].transcript) {
+              return result.alternatives[0].transcript;
+            }
+            return '';
+          })
           .join(' ');
         
-        console.log(`[${requestId}] Transcription successful: "${transcript}"`);
-        return transcript;
-      } else {
-        console.log(`[${requestId}] No transcription results returned`);
-        return '';
-      }
-    } catch (error) {
-      if (axios.isAxiosError(error)) {
-        const status = error.response?.status;
-        const errorData = error.response?.data;
+        console.log(`Transcription successful: "${transcription.substring(0, 100)}${transcription.length > 100 ? '...' : ''}"`);
         
-        if (status === 400) {
-          console.error(`[Audio Format Error] Status 400: Invalid request format. This usually indicates an issue with the audio format.`);
-          console.error(`Error details:`, JSON.stringify(errorData, null, 2));
-          console.error(`Audio MIME type: ${audioBlob.type}, size: ${(audioBlob.size / 1024).toFixed(1)}KB`);
-          
-          // Check if this is actually an API key issue
-          if (errorData?.error?.message?.includes('API Key not found')) {
-            console.error(`[API Key Error] The Google API key appears to be invalid or not properly configured for Speech-to-Text API.`);
-            console.error(`Make sure you've enabled the Speech-to-Text API in your Google Cloud Console for this API key.`);
-            return null;
+        // Extract word information with timestamps if available
+        const words: { word: string, startTime: number, endTime: number }[] = [];
+        let hasWordTimings = false;
+        
+        response.data.results.forEach((result: any) => {
+          if (result.alternatives && result.alternatives[0] && result.alternatives[0].words && result.alternatives[0].words.length > 0) {
+            hasWordTimings = true;
+            result.alternatives[0].words.forEach((wordInfo: any) => {
+              // Convert "1.500s" format to milliseconds, handling potential format issues
+              try {
+                const startSecs = parseFloat(wordInfo.startTime?.replace('s', '') || '0');
+                const endSecs = parseFloat(wordInfo.endTime?.replace('s', '') || '0');
+                
+                words.push({
+                  word: wordInfo.word || '',
+                  startTime: startSecs * 1000, // convert to ms
+                  endTime: endSecs * 1000      // convert to ms
+                });
+              } catch (e) {
+                console.warn('Error parsing word timing:', e);
+              }
+            });
           }
-          
-          return null;
-        } else if (status === 403) {
-          console.error(`[Auth Error] Status 403: Authentication failed. Check your API key and ensure it has Speech-to-Text permissions.`);
-          return null;
+        });
+        
+        if (hasWordTimings) {
+          console.log(`Extracted ${words.length} words with timestamps`);
+          // Return both the text and the word timestamps
+          return { 
+            text: transcription,
+            words
+          };
         } else {
-          console.error(`[API Error] Google Speech API request failed: ${error.message}`, error.response?.data);
+          // Return just the text if no word timings
+          return transcription;
         }
-      } else {
-        console.error(`[Error] Unexpected error during transcription:`, error);
+      } catch (error: any) {
+        // Handle network or API errors
+        console.error('Error in Google Speech API request:', error.message);
+        
+        // Check for API-specific errors
+        if (error.response) {
+          console.error('Google API returned error:', error.response.status);
+          console.error('Response data:', JSON.stringify(error.response.data || {}).substring(0, 500));
+          
+          if (error.response.status === 403) {
+            throw new Error('Google Speech API error - check API key in settings');
+          } else if (error.response.data && error.response.data.error) {
+            throw new Error(`Google Speech API error: ${error.response.data.error.message || 'Unknown API error'}`);
+          }
+        }
+        
+        throw error; // Re-throw to let caller handle it
       }
-      return null;
+    } catch (error: any) {
+      console.error('Error transcribing audio:', error.message);
+      // Provide a more helpful error message 
+      if (error.message.includes('Network Error')) {
+        throw new Error('Network error connecting to Google Speech API - check your internet connection');
+      }
+      throw error; // Re-throw to let the caller handle it
     }
   }
 
-  // Helper function to convert ArrayBuffer to base64 string in browser
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    // Convert ArrayBuffer to Uint8Array
-    const uint8Array = new Uint8Array(buffer);
-    
-    // Convert Uint8Array to a binary string
-    let binaryString = '';
-    for (let i = 0; i < uint8Array.length; i++) {
-      binaryString += String.fromCharCode(uint8Array[i]);
+  // Handle large audio files by splitting into chunks
+  private async processLargeAudioInChunks(audioBuffer: Uint8Array, mimeType: string): Promise<string> {
+    const chunkSize = 750_000; // ~750KB per chunk (safe limit for API)
+    const chunks: Uint8Array[] = [];
+
+    // Split the buffer into chunks
+    for (let i = 0; i < audioBuffer.length; i += chunkSize) {
+      const chunk = audioBuffer.slice(i, i + chunkSize);
+      chunks.push(chunk);
     }
-    
-    // Convert binary string to base64
-    return btoa(binaryString);
-  }
 
-  // Helper function to mask API key for secure logging
-  private maskApiKey(apiKey: string): string {
-    if (!apiKey) return '[NONE]';
-    if (apiKey.length <= 8) return '****' + apiKey.slice(-4);
-    
-    // Show first 4 and last 4 characters, mask the rest
-    return apiKey.slice(0, 4) + '****' + apiKey.slice(-4);
-  }
+    // Determine encoding and sample rate once
+    let encoding: string;
+    let sampleRateHertz: number;
+    if (mimeType.includes('webm') && mimeType.includes('opus')) {
+      encoding = 'WEBM_OPUS';
+      sampleRateHertz = 48000;
+    } else {
+      encoding = 'LINEAR16'; // Default assumption
+      sampleRateHertz = 16000;
+    }
+    console.log(`Processing large file (${chunks.length} chunks) with encoding: ${encoding}, sampleRate: ${sampleRateHertz}Hz`);
 
-  // Helper method to process large audio files by splitting them into chunks
-  private async processLargeAudioInChunks(audioBlob: Blob): Promise<string> {
-    try {
-      // Convert the ENTIRE blob to WAV first for reliable slicing
-      console.log('Converting large audio blob to WAV before chunking...');
-      const wavBlob = await this.convertAudioForGoogleApi(audioBlob);
-      if (!wavBlob || wavBlob.type !== 'audio/wav') {
-        console.error('Failed to convert large audio blob to WAV. Cannot process in chunks.');
-        throw new Error('Failed to convert large audio to WAV for chunking');
-      }
-      console.log(`Large blob converted to WAV: size=${(wavBlob.size / 1024).toFixed(1)}KB`);
-
-      // Calculate chunk size based on the WAV blob size
-      // Target chunk duration ~15-20 seconds (LINEAR16 = 16000Hz * 1 channel * 2 bytes/sample = 32000 bytes/sec)
-      const bytesPerSecond = 32000;
-      const targetChunkSeconds = 15;
-      const chunkSize = bytesPerSecond * targetChunkSeconds; 
-      const numChunks = Math.ceil(wavBlob.size / chunkSize);
-      // Use wavBlob.size for calculations now
-      const actualChunkSize = Math.ceil(wavBlob.size / numChunks); 
+    // Process each chunk and collect results
+    const transcriptions: string[] = [];
       
-      console.log(`Processing WAV audio in ${numChunks} chunks of ~${Math.round(actualChunkSize/1024)}KB each`);
-      
-      let allTranscriptions: string[] = [];
-      
-      // Process chunks
-      for (let i = 0; i < numChunks; i++) {
-        // Slice the WAV blob
-        const start = i * actualChunkSize;
-        const end = Math.min((i + 1) * actualChunkSize, wavBlob.size);
-        const chunkBlob = wavBlob.slice(start, end, 'audio/wav'); 
+    for (let i = 0; i < chunks.length; i++) {
+      try {
+        const base64Audio = Buffer.from(chunks[i]).toString('base64');
         
-        console.log(`Processing chunk ${i+1}/${numChunks} (${Math.round(chunkBlob.size/1024)}KB)`);
-        
-        try {
-          // Convert WAV chunk to base64
-          const base64Audio = await this.blobToBase64(chunkBlob);
-
-          // Prepare request (config is already correct: LINEAR16, 16000Hz)
-          const requestData = {
+        const response = await axios.post(
+          `https://speech.googleapis.com/v1/speech:recognize?key=${this.apiKey}`,
+          {
             config: {
-              encoding: 'LINEAR16',
-              sampleRateHertz: 16000,
-              languageCode: 'en-US',
-              model: 'default',
+              encoding: encoding, // Use determined encoding
+              sampleRateHertz: sampleRateHertz, // Use determined sample rate
+              languageCode: this.language,
+              model: 'latest_long',
               enableAutomaticPunctuation: true,
             },
             audio: {
-              content: base64Audio
-            }
-          };
-          
-          // Construct URL with properly encoded API key
-          const apiUrl = `${this.googleApiEndpoint}?key=${encodeURIComponent(this.apiKey || '')}`;
-          
-          // Send request with slightly longer timeout for chunks
-          const chunkResponse = await axios.post<GoogleSpeechResponse>(
-            apiUrl,
-            requestData,
-            {
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              timeout: 20000 // 20 seconds for chunk processing
-            }
-          );
-          
-          // Extract text from response
-          const chunkText = chunkResponse.data.results
-            ?.map((result: GoogleSpeechResult) => result.alternatives[0].transcript)
-            .join(' ') || '';
-          
-          if (chunkText) {
-            allTranscriptions.push(chunkText);
-            console.log(`Chunk ${i+1} transcription: "${chunkText.substring(0, 30)}${chunkText.length > 30 ? '...' : ''}"`);
+              content: base64Audio,
+            },
           }
+        );
+
+        if (
+          response.data &&
+          response.data.results &&
+          response.data.results.length > 0
+        ) {
+          const text = response.data.results
+            .map((result: any) => result.alternatives[0].transcript)
+            .join(' ');
           
-          // Add a small delay between chunk requests to avoid rate limiting
-          if (i < numChunks - 1) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-        } catch (error) {
-          console.error(`Error processing chunk ${i+1}:`, error);
-          // Continue with next chunk instead of failing completely
+          transcriptions.push(text);
         }
+      } catch (error) {
+        console.error(`Error processing audio chunk ${i}:`, error);
       }
+    }
+
+    return transcriptions.join(' ');
+  }
+  
+  // Utility to combine all audio chunks
+  private concatAudioChunks(): Uint8Array {
+    // Calculate total length
+    let totalLength = 0;
+    for (const chunk of this.audioChunks) {
+      totalLength += chunk.length;
+    }
+
+    // Create a new buffer with the total length
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+
+    // Copy each chunk into the result buffer
+    for (const chunk of this.audioChunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    return result;
+  }
+
+  /**
+   * Start streaming transcription with a callback for real-time results
+   * @param callback Function to receive transcription updates
+   * @returns boolean indicating if streaming was started successfully
+   */
+  public startStreamingTranscription(
+    callback: (text: string, isFinal: boolean) => void
+  ): boolean {
+    try {
+      if (this.streamingActive) {
+        return false;
+      }
+
+      if (!this.apiKey) {
+        console.error('Cannot start streaming without API key');
+        return false;
+      }
+
+      this.transcriptionCallback = callback;
+      this.streamingActive = true;
+      this.clearAudioBuffer();
+
+      // Start a periodic polling to send partial transcriptions
+      this.pollForPartialTranscriptions();
       
-      // Combine all chunk transcriptions
-      const fullTranscription = allTranscriptions.join(' ');
-      console.log(`Complete transcription assembled from ${allTranscriptions.length} chunks`);
-      
-      return fullTranscription;
+      return true;
     } catch (error) {
-      console.error('Error in chunk processing:', error);
-      throw new Error('Failed to process audio in chunks');
+      console.error('Error starting streaming transcription:', error);
+      return false;
     }
   }
 
   /**
-   * Test if the Google Speech API key is valid and properly configured
+   * Stop streaming transcription
    */
-  async testApiKey(): Promise<boolean> {
+  public stopStreamingTranscription(): void {
+    this.streamingActive = false;
+    this.transcriptionCallback = null;
+    this.clearAudioBuffer();
+  }
+
+  /**
+   * Send audio chunk for streaming transcription
+   * @param audioData Audio data in LINEAR16 format
+   */
+  public sendAudioChunk(audioData: Uint8Array): void {
+    if (!this.streamingActive) {
+      return;
+    }
+
+    this.addAudioChunk(audioData);
+  }
+
+  /**
+   * Convert Float32Array to LINEAR16 (Int16Array) format
+   * @param floatArray Input Float32Array
+   * @param inputSampleRate Sample rate of input
+   * @param outputSampleRate Desired output sample rate
+   * @returns Uint8Array containing LINEAR16 audio data
+   */
+  public async convertFloat32ToLinear16(
+    floatArray: Float32Array,
+    inputSampleRate: number,
+    outputSampleRate: number = 16000
+  ): Promise<Uint8Array | null> {
     try {
-      if (!this.apiKey) {
-        console.error('No API key provided for testing');
-        return false;
+      console.log(`Converting Float32Array to LINEAR16: input length ${floatArray.length}, input rate ${inputSampleRate}Hz, output rate ${outputSampleRate}Hz`);
+      
+      // Validate input array
+      if (!floatArray || floatArray.length === 0) {
+        console.error('Cannot convert empty Float32Array to LINEAR16');
+        return null;
       }
       
-      // Create a simple test request with minimal data
-      const testData = {
-        config: {
-          encoding: 'LINEAR16',
-          sampleRateHertz: 16000,
-          languageCode: 'en-US',
-        },
-        audio: {
-          // This is a tiny base64-encoded audio sample (almost empty)
-          content: 'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
-        }
-      };
+      // Log audio signal statistics
+      let minSample = 1.0;
+      let maxSample = -1.0;
+      let sumSquares = 0;
+      for (let i = 0; i < Math.min(floatArray.length, 10000); i++) {
+        const sample = floatArray[i];
+        if (sample < minSample) minSample = sample;
+        if (sample > maxSample) maxSample = sample;
+        sumSquares += sample * sample;
+      }
+      const rms = Math.sqrt(sumSquares / Math.min(floatArray.length, 10000));
+      console.log(`Audio stats: min=${minSample.toFixed(4)}, max=${maxSample.toFixed(4)}, RMS=${rms.toFixed(4)}`);
       
-      console.log('Testing Google Speech API key configuration...');
-      const maskedKey = this.maskApiKey(this.apiKey);
-      console.log(`Using API key: ${maskedKey}`);
+      // Resample if needed
+      let resampledFloat32: Float32Array = floatArray;
       
-      // Construct the URL with the API key properly embedded
-      const apiUrl = `${this.googleApiEndpoint}?key=${encodeURIComponent(this.apiKey)}`;
+      if (inputSampleRate !== outputSampleRate) {
+        console.log(`Resampling from ${inputSampleRate}Hz to ${outputSampleRate}Hz`);
+        resampledFloat32 = this.resampleAudio(floatArray, inputSampleRate, outputSampleRate);
+        console.log(`Resampling complete: new length ${resampledFloat32.length}`);
+      }
       
-      // Send the test request
-      await axios.post(
-        apiUrl,
-        testData,
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 5000
-        }
-      );
+      // Convert to Int16 format
+      const int16Array = new Int16Array(resampledFloat32.length);
       
-      // If we get here, the API key works (even if there's no transcription)
-      console.log('API key test successful - Speech API is accessible');
-      return true;
-    } catch (error) {
-      if (axios.isAxiosError(error)) {
-        const status = error.response?.status;
-        const errorData = error.response?.data;
+      // Scale to 16-bit signed integer range (-32768 to 32767)
+      for (let i = 0; i < resampledFloat32.length; i++) {
+        // Clamp to range [-1, 1]
+        const sample = Math.max(-1, Math.min(1, resampledFloat32[i]));
         
-        if (status === 403) {
-          console.error('ERROR: Authentication failed (403). Please check that your Google API key has Speech-to-Text API enabled.');
-          return false;
-        } else if (status === 400) {
-          // Check if it's actually an API key issue
-          if (errorData?.error?.message?.includes('API Key not found') || 
-              errorData?.error?.message?.includes('API_KEY_INVALID')) {
-            console.error('ERROR: API Key invalid or not configured for Speech-to-Text API.');
-            console.error('Details:', JSON.stringify(errorData?.error || {}, null, 2));
-            return false;
-          }
-          
-          // A 400 error with the test data likely means the API is accessible but there was an issue with the test audio
-          // This is actually a good sign - it means the key itself is valid for Speech API
-          return true;
-        } else {
-          console.error(`API test failed with status ${status}: ${error.message}`);
-          console.error('Error details:', JSON.stringify(errorData || {}, null, 2));
-          return false;
-        }
+        // Convert to 16-bit int
+        int16Array[i] = sample < 0 
+          ? Math.floor(sample * 0x8000) 
+          : Math.floor(sample * 0x7FFF);
       }
       
-      console.error(`Unknown error testing API key: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
+      // Check for all-zero or very quiet audio
+      let nonZeroCount = 0;
+      for (let i = 0; i < Math.min(int16Array.length, 1000); i++) {
+        if (Math.abs(int16Array[i]) > 10) nonZeroCount++;
+      }
+      
+      const percentNonZero = (nonZeroCount / Math.min(int16Array.length, 1000)) * 100;
+      console.log(`LINEAR16 conversion complete: ${int16Array.length} samples, ${percentNonZero.toFixed(1)}% non-zero`);
+      
+      // If the audio is mostly silence, log a warning
+      if (percentNonZero < 1.0) {
+        console.warn('Converted audio contains mostly silence or very low volume');
+      }
+      
+      return new Uint8Array(int16Array.buffer);
+    } catch (error) {
+      console.error('Error converting audio format:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Simple audio resampler (linear interpolation)
+   */
+  private resampleAudio(
+    audioData: Float32Array,
+    inputSampleRate: number,
+    outputSampleRate: number
+  ): Float32Array {
+    if (inputSampleRate === outputSampleRate) {
+      return audioData;
+    }
+    
+    const ratio = inputSampleRate / outputSampleRate;
+    const outputLength = Math.round(audioData.length / ratio);
+    const result = new Float32Array(outputLength);
+    
+    for (let i = 0; i < outputLength; i++) {
+      const index = i * ratio;
+      const indexFloor = Math.floor(index);
+      const indexCeil = Math.min(indexFloor + 1, audioData.length - 1);
+      const fraction = index - indexFloor;
+      
+      // Linear interpolation
+      result[i] = audioData[indexFloor] * (1 - fraction) + audioData[indexCeil] * fraction;
+    }
+    
+    return result;
+  }
+
+  /**
+   * Poll for partial transcriptions while streaming is active
+   */
+  private async pollForPartialTranscriptions(): Promise<void> {
+    if (!this.streamingActive || !this.transcriptionCallback) {
+      return;
+    }
+
+    try {
+      if (this.audioChunks.length > 0) {
+        const partialText = await this.transcribePartialAudio();
+        if (partialText) {
+          this.transcriptionCallback(partialText, false);
+        }
+      }
+    } catch (error) {
+      console.error('Error polling for partial transcription:', error);
+    }
+
+    // Continue polling if still active
+    if (this.streamingActive) {
+      setTimeout(() => this.pollForPartialTranscriptions(), 1000);
     }
   }
 }
+
+// Export a singleton instance (optional, depends on usage pattern)
+// export const googleSpeechService = new GoogleSpeechService();

@@ -19,6 +19,7 @@
     "allowImportingTsExtensions": true,
     "types": ["vite/client"]
   },
-  "include": ["electron/**/*", "src/**/*"],
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "dist-electron", "electron"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

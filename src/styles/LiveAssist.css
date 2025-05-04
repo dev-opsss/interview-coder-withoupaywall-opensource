@@ -1,0 +1,95 @@
+/* Live Assist Styles */
+
+.live-assist-container {
+  padding: 16px;
+  border-radius: 8px;
+  background-color: #f9f9f9;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin-bottom: 20px;
+}
+
+/* Transcript container styles */
+.transcript-container {
+  position: relative;
+  scroll-behavior: smooth;
+  transition: all 0.3s ease;
+  height: auto !important;
+  max-height: 200px;
+  overflow-y: auto !important;
+  padding: 12px !important;
+  margin-bottom: 16px;
+  border-radius: 8px !important;
+  background-color: rgba(0, 0, 0, 0.02) !important;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Suggestion container styles */
+.suggestion-container {
+  position: relative;
+  scroll-behavior: smooth;
+  transition: all 0.3s ease;
+  height: auto !important;
+  min-height: 150px !important;
+  max-height: 300px !important;
+  overflow-y: auto !important;
+  padding: 12px !important;
+  margin-bottom: 16px;
+  border-radius: 8px !important;
+  background-color: rgba(144, 238, 144, 0.1) !important;
+  border: 1px solid rgba(144, 238, 144, 0.3);
+}
+
+/* Text styling */
+.transcript-text, .suggestion-text {
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  white-space: pre-wrap !important;
+  line-height: 1.5 !important;
+  font-size: 16px !important;
+}
+
+/* Pulsing dot for active recording */
+.pulse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #f44336;
+  margin-left: 8px;
+  vertical-align: middle;
+  animation: pulse 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.8);
+    opacity: 0.7;
+  }
+}
+
+/* Stable transitions to reduce UI jumps */
+.transcript-text, .suggestion-text {
+  transition: all 0.3s ease;
+}
+
+/* Prevent element jumping with minimum heights */
+.transcript-container:empty {
+  min-height: 100px;
+}
+
+.suggestion-container:empty {
+  min-height: 150px;
+}
+
+/* Make clear button more visible when content exists */
+button:not(:disabled) {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+} 
