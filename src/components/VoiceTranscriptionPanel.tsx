@@ -111,45 +111,22 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
         setDisplayTranscript(prev => `${prev}${role === 'user' ? 'You' : 'Interviewer'}: ${transcribedText}\n`); 
       } else {
         console.error(`${role} Transcription failed:`, result?.error);
-        // Show error in transcript to alert user
+        // Get error details but don't show in transcript
         const errorText = result?.error || 'Unknown transcription error';
-        const errorShortened = errorText.includes('Google Speech API') 
-          ? 'Google Speech API error - check API key in settings' 
-          : errorText;
-        
-        // Add error to transcript entries
-        setTranscriptEntries(prev => [
-          ...prev, 
-          {
-            speaker: role,
-            text: `[Error: ${errorShortened}]`,
-            timestamp: Date.now()
-          }
-        ]);
-        
-        // Also update text-only transcript
-        setDisplayTranscript(prev => `${prev}[Error: ${errorShortened}]\n`);
         
         // Show alert for major errors that require user action
         if (errorText.includes('API key')) {
           alert(`Speech-to-text error: ${errorText}\n\nPlease check your speech service settings and API key.`);
+        } else {
+          // Only log to console, don't add to transcript
+          console.warn(`Transcription error (not shown in UI): ${errorText}`);
         }
       }
     } catch (error) {
       console.error(`Error during ${role} transcription IPC:`, error);
       
-      // Add error to transcript entries
-      setTranscriptEntries(prev => [
-        ...prev, 
-        {
-          speaker: role,
-          text: `[IPC Error: Transcription service unavailable]`,
-          timestamp: Date.now()
-        }
-      ]);
-      
-      // Also update text-only transcript
-      setDisplayTranscript(prev => `${prev}[IPC Error: Transcription service unavailable]\n`);
+      // Don't add IPC errors to transcript either
+      console.warn("IPC Error (not shown in UI): Transcription service unavailable");
     } finally {
       // Go back to listening state unless generating suggestion
       if (!isGeneratingResponse) {
@@ -220,14 +197,17 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
            console.log("Auto-response generated successfully");
          } else {
            console.error("Auto-response generation failed:", suggestionResult?.error);
+           // Set message in suggestion area (not in transcript)
            setSuggestedResponse(`Error: ${suggestionResult?.error || 'Unknown error'}`);
          }
       } else {
          console.error(`${role} Transcription failed (after silence):`, transcriptionResult?.error);
-         setSuggestedResponse(`Transcription Error: ${transcriptionResult?.error}`);
+         // Don't add error to transcript, just set it in the suggestion area
+         setSuggestedResponse(`Transcription Error: ${transcriptionResult?.error || 'Unknown error'}`);
       }
     } catch (error: any) {
       console.error("Error in auto-suggestion processing:", error);
+      // Set error message in suggestion area only
       setSuggestedResponse(`Error: ${error.message || error}`);
     } finally {
       setIsGeneratingResponse(false);
@@ -262,6 +242,7 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
           // Initialize auto mode from settings if available
           if (settings.autoMode !== undefined) {
             setAutoMode(settings.autoMode);
+            // We don't start listening here because startListening might not be available yet
           }
         }
       } catch (error) {
@@ -322,6 +303,16 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
     // --- END: Fetch Audio Devices & Settings ---
 
   }, []); // Empty dependency array means run once on mount
+
+  // New effect to handle auto mode activation after component is fully mounted
+  useEffect(() => {
+    // Only run this effect when the component is fully mounted and ready
+    if (autoMode) {
+      console.log('Auto mode is enabled on mount, starting listening...');
+      startListening();
+      setVoiceStatus('listening');
+    }
+  }, [autoMode, startListening]); // Dependencies ensure it runs when these values change
 
   // --- Handler to save specific settings from Modal ---
   const handleSaveModalSettings = async (stage: string, prefs: string) => {
