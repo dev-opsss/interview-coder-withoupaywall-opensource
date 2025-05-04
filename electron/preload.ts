@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+
 // Safe console logging to prevent EPIPE errors
 const safeLog = (...args: any[]) => {
   try {
@@ -321,7 +323,12 @@ const electronAPI = {
         'saveSpeechService',
         'extract-resume-text',
         'transcribe-audio',
-        'generate-response-suggestion'
+        'generate-response-suggestion',
+        'get-audio-device-settings',
+        'save-audio-device-settings',
+        'testGoogleSpeechApiKey',
+        'get-personality-prompt',
+        'get-personality',
       ];
       if (!allowedInvokeChannels.includes(channel)) {
           safeLog(`Preload ERROR: Denied invoke call to untrusted channel: ${channel}`);
@@ -341,7 +348,8 @@ const electronAPI = {
         'update-available', 'update-downloaded', 'credits-updated', 
         'show-settings-dialog', 'api-key-invalid', 'delete-last-screenshot',
         'toggle-voice-input', 'show-input-overlay', 'close-input-overlay',
-        'restore-focus', 'audio-capture-error', 'audio-capture-status'
+        'restore-focus', 'audio-capture-error', 'audio-capture-status',
+        'auto-response-update'
         // DO NOT add 'audio-data-chunk' here if using specific handler below
     ];
      if (!allowedListenerChannels.includes(channel)) {
@@ -359,6 +367,7 @@ const electronAPI = {
   },
 
   // Explicit listener setup for audio data
+  /* // Commented out onAudioDataChunk
   onAudioDataChunk: (callback: (audioBuffer: ArrayBuffer) => void) => {
     const handler = (event: Electron.IpcRendererEvent, audioBuffer: ArrayBuffer) => {
         // Validate data if possible (e.g., check if it's an ArrayBuffer)
@@ -377,52 +386,21 @@ const electronAPI = {
         ipcRenderer.removeListener(channelName, handler);
     };
   },
+  */
   // --- End of Whisper IPC Methods ---
 
   // Transcribe audio data
-  transcribeAudio: async (audioBlob: Blob) => {
-    try {
-      safeLog(`Preload: Received audio blob for transcription (type: ${audioBlob.type}, size: ${audioBlob.size} bytes)`);
-      
-      if (audioBlob.size === 0) {
-        safeLog('Preload ERROR: Received empty audio blob (0 bytes)');
-        return { success: false, error: 'Empty audio data - please try again' };
-      }
-      
-      // First, check if we need to do any client-side conversion
-      let finalBlob = audioBlob;
-      
-      // If it's not a supported format, we'll let the backend handle it
-      // by adding a mime type hint
-      const supportedFormats = ['audio/webm', 'audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/ogg'];
-      const isSupported = supportedFormats.some(format => audioBlob.type.includes(format));
-      
-      if (!isSupported) {
-        safeLog(`Preload: Audio format ${audioBlob.type} may not be directly supported by OpenAI`);
-      }
-      
-      // Convert Blob to ArrayBuffer for sending over IPC
-      const arrayBuffer = await finalBlob.arrayBuffer();
-      
-      if (arrayBuffer.byteLength === 0) {
-        safeLog('Preload ERROR: ArrayBuffer is empty (0 bytes)');
-        return { success: false, error: 'Empty audio data after conversion - please try again' };
-      }
-      
-      safeLog(`Preload: Converted blob to ArrayBuffer successfully (size: ${arrayBuffer.byteLength} bytes)`);
-      
-      // Send original mime type as well to help backend choose correct extension
-      const transcribePayload = {
-        buffer: arrayBuffer,
-        mimeType: finalBlob.type || 'audio/mpeg' // Default to mp3 if not set
-      };
-      
-      safeLog(`Preload: Sending transcription request with MIME type: ${transcribePayload.mimeType}`);
-      
-      return await ipcRenderer.invoke('transcribe-audio', transcribePayload);
-    } catch (error) {
-      safeLog('Preload ERROR: Failed to process audio blob:', error);
-      return { success: false, error: 'Failed to process audio data' };
+  transcribeAudio: async (audioData: ArrayBuffer | { buffer: ArrayBuffer, mimeType: string }) => {
+    // Handle new format with mimeType
+    if (audioData && typeof audioData === 'object' && 'buffer' in audioData && 'mimeType' in audioData) {
+      const result = await ipcRenderer.invoke('transcribe-audio', audioData);
+      // Return the complete result including word timestamps if available
+      return result;
+    } else {
+      // Legacy format (just buffer)
+      const result = await ipcRenderer.invoke('transcribe-audio', audioData);
+      // Return the complete result including word timestamps if available
+      return result;
     }
   },
 
@@ -466,8 +444,67 @@ const electronAPI = {
   // Allow partial settings object for saving
   saveAiSettings: (settings: Partial<{ personality: string; interviewStage: string; userPreferences: string }>) => 
     ipcRenderer.invoke('save-ai-settings', settings),
-  generateResponseSuggestion: (payload: { question: string; jobContext: any; resumeTextContent: string | null; }) => 
+  generateResponseSuggestion: (payload: { question: string; jobContext: any; resumeTextContent: string | null; speakerRole?: string }) => 
     ipcRenderer.invoke('generate-response-suggestion', payload),
+
+  // Add a direct method to update the main UI display
+  updateAssistanceDisplay: (responseText: string) => {
+    safeLog("Updating main UI with auto response");
+    // This will be a shared window variable that the main UI can watch
+    try {
+      // Set the response in window.__AUTO_RESPONSE__ variable
+      // This will be observed by the main UI component
+      if (window) {
+        (window as any).__AUTO_RESPONSE__ = responseText;
+        
+        // Also dispatch a custom event that components can listen for
+        const event = new CustomEvent('auto-response-generated', { 
+          detail: { responseText } 
+        });
+        window.dispatchEvent(event);
+        
+        // Also send an IPC message to the main process
+        // This allows the main process to forward it to all renderers if needed
+        ipcRenderer.invoke('auto-response-generated', responseText)
+          .catch(err => safeLog("Error sending auto-response IPC:", err));
+        
+        return true;
+      }
+      return false;
+    } catch (error) {
+      safeLog("Error updating assistance display:", error);
+      return false;
+    }
+  },
+  
+  // Listen for automatic response generation events
+  onAutoResponseGenerated: (callback: (responseText: string) => void) => {
+    const handler = (event: CustomEvent) => {
+      callback(event.detail.responseText);
+    };
+    
+    window.addEventListener('auto-response-generated', handler as EventListener);
+    
+    // Return cleanup function
+    return () => {
+      window.removeEventListener('auto-response-generated', handler as EventListener);
+    };
+  },
+  
+  // Listen for auto-response updates from main process
+  onAutoResponseUpdate: (callback: (responseText: string) => void) => {
+    const subscription = (_: any, responseText: string) => callback(responseText);
+    ipcRenderer.on('auto-response-update', subscription);
+    return () => {
+      ipcRenderer.removeListener('auto-response-update', subscription);
+    };
+  },
+
+  // ---> Add Audio Device Settings Methods <-----
+  getAudioDeviceSettings: () => ipcRenderer.invoke('get-audio-device-settings'),
+  saveAudioDeviceSettings: (settings: { speakerDeviceId?: string | null; microphoneDeviceId?: string | null }) => 
+    ipcRenderer.invoke('save-audio-device-settings', settings),
+  // ---> END Add Methods <-----------------------
 }
 
 // Before exposing the API
@@ -517,11 +554,11 @@ declare global {
 
       // Transcription / Assistant related
       toggleVoiceInput: () => Promise<boolean>;
-      startAudioCapture: () => Promise<void>;
-      stopAudioCapture: () => Promise<void>;
+      // startAudioCapture: () => Promise<void>; // Removed native capture
+      // stopAudioCapture: () => Promise<void>; // Removed native capture
       transcribeAudio: (audioData: { buffer: ArrayBuffer; type: string }) => Promise<string | null>;
       handleAiQuery: (args: { query: string; language?: string }) => Promise<string | null>;
-      handleResumeUpload: (filePath: string) => Promise<string | null>;
+      // handleResumeUpload: (filePath: string) => Promise<string | null>; // Likely replaced by extractResumeText
       getGoogleSpeechApiKey: () => Promise<string | null>;
       saveGoogleSpeechApiKey: (apiKey: string) => Promise<void>;
       getSpeechService: () => Promise<'whisper' | 'google' | null>;
@@ -545,7 +582,13 @@ declare global {
       // ---> END Add Type <-------------------------
 
       // ---> Add Response Suggestion Type <-----
-      generateResponseSuggestion: (payload: { question: string; jobContext: any; resumeTextContent: string | null; }) => Promise<{ success: boolean; data?: string; error?: string }>;
+      generateResponseSuggestion: (payload: { question: string; jobContext: any; resumeTextContent: string | null; speakerRole?: string }) => Promise<{ success: boolean; data?: string; error?: string }>;
+      // ---> END Add Type <-------------------------
+
+      // ---> Add Auto Response Types <-----
+      updateAssistanceDisplay: (responseText: string) => boolean;
+      onAutoResponseGenerated: (callback: (responseText: string) => void) => (() => void);
+      onAutoResponseUpdate: (callback: (responseText: string) => void) => (() => void);
       // ---> END Add Type <-------------------------
 
       onTranscriptionReceived: (callback: (text: string) => void) => () => void;
@@ -557,6 +600,11 @@ declare global {
         removeListener(channel: string, listener: (...args: any[]) => void): Electron.IpcRenderer;
         // Add send if needed
       };
+
+      // ---> Add Audio Device Settings Methods <-----
+      getAudioDeviceSettings: () => Promise<{ speakerDeviceId: string | null; microphoneDeviceId: string | null }>;
+      saveAudioDeviceSettings: (settings: { speakerDeviceId?: string | null; microphoneDeviceId?: string | null }) => Promise<{ success: boolean; error?: string }>;
+      // ---> END Add Methods <-----------------------
     }
   }
 }

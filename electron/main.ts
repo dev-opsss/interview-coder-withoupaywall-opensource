@@ -50,6 +50,12 @@ import * as dotenv from "dotenv"
 import fsPromises from 'fs/promises'; // Use promises version of fs
 import pdf from 'pdf-parse';
 import mammoth from 'mammoth';
+import { initializeStore, getStoreInstance } from './store'
+import { release } from "node:os"
+import { autoUpdater } from "electron-updater"
+
+// Add a constant for dev server URL at the top of the file
+const DEV_SERVER_URL = 'http://localhost:5173';
 
 // Global uncaughtException handler for EPIPE errors
 process.on('uncaughtException', (error: NodeJS.ErrnoException) => {
@@ -300,7 +306,7 @@ export interface IIpcHandlerDeps {
 
 // Initialize helpers
 function initializeHelpers() {
-  state.screenshotHelper = new ScreenshotHelper(state.view)
+  state.screenshotHelper = ScreenshotHelper.getInstance(state.view)
   state.processingHelper = new ProcessingHelper({
     getScreenshotHelper,
     getMainWindow,
@@ -318,6 +324,7 @@ function initializeHelpers() {
     getHasDebugged,
     PROCESSING_EVENTS: state.PROCESSING_EVENTS
   } as IProcessingHelperDeps)
+  
   state.shortcutsHelper = new ShortcutsHelper({
     getMainWindow,
     takeScreenshot,
@@ -342,6 +349,9 @@ function initializeHelpers() {
     moveWindowDown: () => moveWindowVertical((y) => y + state.step),
     toggleVoiceInput
   } as IShortcutsHelperDeps)
+
+  // Synchronize settings between ConfigHelper and store
+  synchronizeConfigurations();
 }
 
 // Auth callback handler
@@ -386,8 +396,11 @@ async function createWindow(): Promise<void> {
   if (state.mainWindow) {
     if (state.mainWindow.isMinimized()) state.mainWindow.restore()
     state.mainWindow.focus()
+    safeLog("Using existing window instead of creating a new one")
     return
   }
+
+  safeLog("Starting window creation process...")
 
   const primaryDisplay = screen.getPrimaryDisplay()
   const workArea = primaryDisplay.workAreaSize
@@ -494,12 +507,40 @@ async function createWindow(): Promise<void> {
     async (event, errorCode, errorDescription) => {
       safeError("Window failed to load:", errorCode, errorDescription)
       if (isDev) {
-        // In development, retry loading after a short delay
+        // Retry loading after a delay
         safeLog("Retrying to load development server...")
-        setTimeout(() => {
-          state.mainWindow?.loadURL("http://localhost:54321").catch((error) => {
-            safeError("Failed to load dev server on retry:", error)
-          })
+        setTimeout(async () => {
+          try {
+            await state.mainWindow?.loadURL(DEV_SERVER_URL)
+          } catch (error) {
+            safeError(`Failed to load dev server on retry: ${error}`);
+            
+            // Try to load local file as absolute last resort
+            const localIndexPath = path.join(app.getAppPath(), 'dist', 'index.html');
+            safeLog("Falling back to:", localIndexPath)
+            if (fs.existsSync(localIndexPath)) {
+              try {
+                await state.mainWindow!.loadFile(localIndexPath)
+                safeLog("Loaded local file successfully");
+              } catch (loadFileError) {
+                safeError("Failed to load index file:", loadFileError)
+              }
+            } else {
+              safeError("Could not find index.html in dist folder")
+            }
+          }
+        }, 1000)
+      } else {
+        // In production, retry loading after a short delay as a last resort
+        const prodIndexPath = path.join(app.getAppPath(), 'dist', 'index.html');
+        setTimeout(async () => {
+          try {
+            // Try again with the file URL
+            await state.mainWindow?.loadFile(prodIndexPath)
+            safeLog("Loaded local file on retry")
+          } catch (error) {
+            safeError("Failed to load file on retry:", error)
+          }
         }, 1000)
       }
     }
@@ -507,18 +548,21 @@ async function createWindow(): Promise<void> {
 
   if (isDev) {
     // In development, load from the dev server
-    safeLog("Loading from development server: http://localhost:54321")
-    state.mainWindow.loadURL("http://localhost:54321").catch((error) => {
+    safeLog("Loading from development server: " + DEV_SERVER_URL)
+    try {
+      // Load URL from the development server
+      await state.mainWindow.loadURL(DEV_SERVER_URL)
+    } catch (error) {
       safeError("Failed to load dev server, falling back to local file:", error)
       // Fallback to local file if dev server is not available
       const indexPath = path.join(__dirname, "../dist/index.html")
       safeLog("Falling back to:", indexPath)
       if (fs.existsSync(indexPath)) {
-        state.mainWindow.loadFile(indexPath)
+        state.mainWindow!.loadFile(indexPath)
       } else {
         safeError("Could not find index.html in dist folder")
       }
-    })
+    }
   } else {
     // In production, load from the built files
     const indexPath = path.join(__dirname, "../dist/index.html")
@@ -597,17 +641,31 @@ async function createWindow(): Promise<void> {
   const savedOpacity = configHelper.getOpacity();
   safeLog(`Initial opacity from config: ${savedOpacity}`);
   
-  // Always make sure window is shown first
-  state.mainWindow.showInactive(); // Use showInactive for consistency
-  
-  if (savedOpacity <= 0.1) {
-    safeLog('Initial opacity too low, setting to 0 and hiding window');
-    state.mainWindow.setOpacity(0);
-    state.isWindowVisible = false;
+  // Show the window with initial opacity
+  try {
+    // Always make window visible first
+    state.mainWindow.show();
+    state.mainWindow.focus();
+    
+    // Check for environment variable to force window visibility
+    const forceVisible = process.env.FORCE_VISIBLE === 'true';
+    
+    // Then set opacity based on config or env var
+    if (forceVisible) {
+      safeLog('FORCE_VISIBLE is set, making window fully visible');
+      state.mainWindow.setOpacity(1.0);
+      state.isWindowVisible = true;
+    } else if (savedOpacity <= 0.1) {
+      safeLog('Initial opacity too low, setting to default 1.0');
+      state.mainWindow.setOpacity(1.0);
   } else {
     safeLog(`Setting initial opacity to ${savedOpacity}`);
     state.mainWindow.setOpacity(savedOpacity);
+    }
+    
     state.isWindowVisible = true;
+  } catch (error) {
+    safeError('Error showing window:', error);
   }
 }
 
@@ -635,44 +693,110 @@ function handleWindowClosed(): void {
 // Window visibility functions
 function hideMainWindow(): void {
   if (!state.mainWindow?.isDestroyed()) {
-    const bounds = state.mainWindow.getBounds();
+    // Use non-null assertion since we've already checked with isDestroyed()
+    const bounds = state.mainWindow!.getBounds();
     state.windowPosition = { x: bounds.x, y: bounds.y };
     state.windowSize = { width: bounds.width, height: bounds.height };
-    state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
-    state.mainWindow.setOpacity(0);
+    state.mainWindow!.setIgnoreMouseEvents(true, { forward: true });
+    state.mainWindow!.setOpacity(0);
     state.isWindowVisible = false;
     safeLog('Window hidden, opacity set to 0');
   }
 }
 
 function showMainWindow(): void {
-  if (!state.mainWindow?.isDestroyed()) {
+  safeLog('Attempting to show main window...');
+  if (!state.mainWindow) {
+    safeError('Cannot show window: state.mainWindow is null');
+    return;
+  }
+  
+  if (state.mainWindow.isDestroyed()) {
+    safeError('Cannot show window: window has been destroyed');
+    return;
+  }
+
+  try {
     if (state.windowPosition && state.windowSize) {
-      state.mainWindow.setBounds({
+      safeLog(`Setting window bounds to ${JSON.stringify(state.windowPosition)}, ${JSON.stringify(state.windowSize)}`);
+      state.mainWindow!.setBounds({
         ...state.windowPosition,
         ...state.windowSize
       });
     }
-    state.mainWindow.setIgnoreMouseEvents(false);
-    state.mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
-    state.mainWindow.setVisibleOnAllWorkspaces(true, {
+    
+    // Force full opacity and ensure window is visible
+    state.mainWindow!.setIgnoreMouseEvents(false);
+    state.mainWindow!.setAlwaysOnTop(true, "screen-saver", 1);
+    state.mainWindow!.setVisibleOnAllWorkspaces(true, {
       visibleOnFullScreen: true
     });
-    state.mainWindow.setContentProtection(true);
-    state.mainWindow.setOpacity(0); // Set opacity to 0 before showing
-    state.mainWindow.showInactive(); // Use showInactive instead of show+focus
-    state.mainWindow.setOpacity(1); // Then set opacity to 1 after showing
+    state.mainWindow!.setContentProtection(true);
+    
+    // Show window first with full opacity
+    state.mainWindow!.setOpacity(1);
+    state.mainWindow!.show();
+    state.mainWindow!.focus();
+    
+    // Force redraw
+    state.mainWindow!.webContents.invalidate();
+    
     state.isWindowVisible = true;
-    safeLog('Window shown with showInactive(), opacity set to 1');
+    safeLog('Window should now be visible with opacity=1');
+  } catch (error) {
+    safeError('Error while showing window:', error);
   }
 }
 
 function toggleMainWindow(): void {
-  safeLog(`Toggling window. Current state: ${state.isWindowVisible ? 'visible' : 'hidden'}`);
+  safeLog(`Toggling window. Current state: ${state.isWindowVisible ? 'visible' : 'hidden'}, mainWindow exists: ${state.mainWindow ? 'yes' : 'no'}`);
+  
+  if (!state.mainWindow) {
+    safeError('Cannot toggle window: state.mainWindow is null');
+    return;
+  }
+  
+  if (state.mainWindow.isDestroyed()) {
+    safeError('Cannot toggle window: window has been destroyed');
+    return;
+  }
+  
+  try {
+    // Direct toggle without using helper functions
   if (state.isWindowVisible) {
-    hideMainWindow();
+      // Hide window
+      safeLog('Hiding window directly...');
+      
+      // Save current position and size
+      const bounds = state.mainWindow.getBounds();
+      state.windowPosition = { x: bounds.x, y: bounds.y };
+      state.windowSize = { width: bounds.width, height: bounds.height };
+      
+      // Hide the window
+      state.mainWindow.setOpacity(0);
+      state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
+      state.isWindowVisible = false;
   } else {
-    showMainWindow();
+      // Show window
+      safeLog('Showing window directly...');
+      
+      // Restore position and size if available
+      if (state.windowPosition && state.windowSize) {
+        state.mainWindow.setBounds({
+          ...state.windowPosition,
+          ...state.windowSize
+        });
+      }
+      
+      // Show the window
+      state.mainWindow.setOpacity(1);
+      state.mainWindow.setIgnoreMouseEvents(false);
+      state.mainWindow.show();
+      state.mainWindow.focus();
+      state.isWindowVisible = true;
+    }
+  } catch (error) {
+    safeError('Error toggling window:', error);
   }
 }
 
@@ -718,12 +842,12 @@ function moveWindowVertical(updateFn: (y: number) => number): void {
 // Window dimension functions
 function setWindowDimensions(width: number, height: number): void {
   if (!state.mainWindow?.isDestroyed()) {
-    const [currentX, currentY] = state.mainWindow.getPosition()
+    const [currentX, currentY] = state.mainWindow!.getPosition()
     const primaryDisplay = screen.getPrimaryDisplay()
     const workArea = primaryDisplay.workAreaSize
     const maxWidth = Math.floor(workArea.width * 0.5)
 
-    state.mainWindow.setBounds({
+    state.mainWindow!.setBounds({
       x: Math.min(currentX, workArea.width - maxWidth),
       y: currentY,
       width: Math.min(width + 32, maxWidth),
@@ -748,14 +872,15 @@ function loadEnvVariables() {
 }
 
 // --- Placeholder for Audio Capture State ---
-let isCapturingAudio = false;
-let stopCaptureFunction: (() => Promise<void>) | null = null; // Function to stop platform capture
+// let isCapturingAudio = false;
+// let stopCaptureFunction: (() => Promise<void>) | null = null; // Function to stop platform capture
 
 // --- Platform-Specific Audio Capture Functions ---
 
 // Add a global variable to track the native module
-let macAudioModule: any = null;
+// let macAudioModule: any = null;
 
+/* // Commented out entire function
 async function startMacAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
   safeLog('Attempting to start macOS audio capture...');
   
@@ -851,14 +976,15 @@ async function startMacAudioCapture(webContents: Electron.WebContents): Promise<
     // Create the audio callback function
     const audioCallback = (audioData: any) => {
       try {
-        if (!isCapturingAudio || !webContents || webContents.isDestroyed()) {
+        // if (!isCapturingAudio || !webContents || webContents.isDestroyed()) { // Use isCapturingAudio if kept
+        if (!webContents || webContents.isDestroyed()) { // Simplified check if state is removed
           return;
         }
         
         // Check if the data is in the expected format
         if (audioData && audioData.data) {
           // Send to renderer
-          webContents.send('audio-data-chunk', audioData.data.buffer);
+          // webContents.send('audio-data-chunk', audioData.data.buffer); // Removed IPC channel
           
           // Log occasionally (not every frame to avoid console spam)
           if (Math.random() < 0.001) {  // Reduced from 0.01 to 0.001 (log ~0.1% of frames)
@@ -912,7 +1038,7 @@ async function startMacAudioCapture(webContents: Electron.WebContents): Promise<
         safeError("Error stopping native audio capture:", stopError);
       }
     };
-  } catch (startError) {
+  } catch (startError: any) { // Explicitly type startError
     safeError("Error starting native audio capture:", startError);
     
     // Check if the error is related to permissions
@@ -935,7 +1061,7 @@ async function startMacAudioCapture(webContents: Electron.WebContents): Promise<
           '3. Restart the application after granting permission'
         ] : [
           'Check if your audio devices are properly connected',
-          'Try installing Microsoft Teams to enable system audio capture',
+          // 'Try installing Microsoft Teams to enable system audio capture', // Removed suggestion
           'Restart the application and try again'
         ]
       });
@@ -947,7 +1073,9 @@ async function startMacAudioCapture(webContents: Electron.WebContents): Promise<
     };
   }
 }
+*/
 
+/* // Commented out entire function
 async function startWindowsAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
    safeLog('Attempting to start Windows audio capture...');
    // --- Integration Point for Windows native module/method --- 
@@ -960,7 +1088,7 @@ async function startWindowsAudioCapture(webContents: Electron.WebContents): Prom
        message: 'Windows audio capture is not yet implemented.',
        details: 'This feature is coming in a future update.',
        troubleshooting: [
-         'Use macOS for audio capture features',
+         // 'Use macOS for audio capture features', // Removed suggestion
          'Check for application updates'
        ]
      });
@@ -971,7 +1099,9 @@ async function startWindowsAudioCapture(webContents: Electron.WebContents): Prom
      safeLog('No Windows audio capture to stop (not implemented)');
    };
 }
+*/
 
+/* // Commented out entire function
 async function startLinuxAudioCapture(webContents: Electron.WebContents): Promise<() => Promise<void>> {
     safeLog('Attempting to start Linux audio capture...');
     // --- Integration Point for Linux ALSA/PulseAudio loopback --- 
@@ -984,7 +1114,7 @@ async function startLinuxAudioCapture(webContents: Electron.WebContents): Promis
         message: 'Linux audio capture is not yet implemented.',
         details: 'This feature is coming in a future update.',
         troubleshooting: [
-          'Use macOS for audio capture features',
+          // 'Use macOS for audio capture features', // Removed suggestion
           'Check for application updates'
         ]
       });
@@ -995,188 +1125,60 @@ async function startLinuxAudioCapture(webContents: Electron.WebContents): Promis
       safeLog('No Linux audio capture to stop (not implemented)');
     };
 }
+*/
 
 
 // --- Updated IPC Handlers for Audio ---
-ipcMain.handle('start-audio-capture', async (event) => {
-  if (isCapturingAudio) {
-    safeLog('Audio capture already in progress.');
-    return { success: true, message: 'Already capturing' };
-  }
-  safeLog('IPC: Received start-audio-capture request.');
+// Removed start-audio-capture and stop-audio-capture handlers as they are no longer needed
+// ipcMain.handle('start-audio-capture', async (event) => { ... });
+// ipcMain.handle('stop-audio-capture', async (event) => { ... });
 
-  const mainWindow = getMainWindow(); // Use your existing function to get the window
-  if (!mainWindow || mainWindow.isDestroyed()) {
-      safeError('Cannot start audio capture: Main window not available.');
-      return { success: false, error: 'Main window not available' };
-  }
-
+// Function to synchronize configuration between ConfigHelper and store
+function synchronizeConfigurations() {
   try {
-    isCapturingAudio = true; // Set flag early
-    let platformStopFunction: () => Promise<void>;
-
-    switch (process.platform) {
-        case 'darwin': // macOS
-            platformStopFunction = await startMacAudioCapture(mainWindow.webContents);
-            break;
-        case 'win32': // Windows
-            platformStopFunction = await startWindowsAudioCapture(mainWindow.webContents);
-            break;
-        case 'linux': // Linux
-            platformStopFunction = await startLinuxAudioCapture(mainWindow.webContents);
-            break;
-        default:
-            throw new Error(`Unsupported platform for audio capture: ${process.platform}`);
-    }
-    stopCaptureFunction = platformStopFunction; // Store the specific stop function
-    safeLog(`Audio capture started successfully for ${process.platform}.`);
-    return { success: true, message: `Capture started for ${process.platform}` };
-
-  } catch (error: any) {
-      safeError('Failed to start audio capture:', error);
-      isCapturingAudio = false; // Reset flag on error
-      stopCaptureFunction = null;
-      return { success: false, error: error.message || 'Unknown error starting audio capture' };
-  }
-});
-
-ipcMain.handle('stop-audio-capture', async (event) => {
-  if (!isCapturingAudio) {
-    safeLog('Audio capture is not in progress.');
-    return { success: true, message: 'Was not capturing' };
-  }
-  safeLog('IPC: Received stop-audio-capture request.');
-
-  if (stopCaptureFunction) {
-      try {
-          await stopCaptureFunction(); // Call the stored platform-specific stop function
-          safeLog('Platform audio capture stopped successfully.');
-      } catch (error: any) {
-          safeError('Error stopping platform audio capture:', error);
-          // Continue cleanup even if platform stop failed
-      }
-  } else {
-      safeLog('No active stop function found, cleaning up flags only.');
-  }
-
-  isCapturingAudio = false; // Ensure flag is reset
-  stopCaptureFunction = null; // Clear stored function
-
-  return { success: true, message: 'Capture stop request processed.' };
-});
-
-async function getConfig() {
-  try {
-    const userDataPath = app.getPath("userData")
-    const configPath = path.join(userDataPath, "config.json")
-    
-    if (fs.existsSync(configPath)) {
-      const configData = await fs.promises.readFile(configPath, "utf8")
-      return JSON.parse(configData)
-    } else {
-      // Create default config
-      const defaultConfig = { apiKey: "", model: "gpt-4" }
-      await fs.promises.writeFile(
-        configPath,
-        JSON.stringify(defaultConfig, null, 2),
-        "utf8"
-      )
-      return defaultConfig
-    }
-  } catch (error) {
-    console.error("Error loading config:", error)
-    return { apiKey: "", model: "gpt-4" }
-  }
-}
-
-// Add saveConfig function
-async function saveConfig(config: Config) {
-  try {
-    const userDataPath = app.getPath("userData")
-    const configPath = path.join(userDataPath, "config.json")
-    await fs.promises.writeFile(
-      configPath,
-      JSON.stringify(config, null, 2),
-      "utf8"
-    )
-    return true
-  } catch (error) {
-    console.error("Error saving config:", error)
-    return false
-  }
-}
-
-// Update Config interface (add before getConfig if it exists, otherwise add it here)
-interface Config {
-  apiKey?: string;
-  model?: string;
-  language?: string;
-  opacity?: number;
-  googleSpeechApiKey?: string;
-  speechService?: string;
-  // Add any other existing properties here
-}
-
-// Add the handlers for Google Speech API
-ipcMain.handle('getGoogleSpeechApiKey', async () => {
-  const config = await getConfig();
-  return config.googleSpeechApiKey || null;
-});
-
-ipcMain.handle('saveGoogleSpeechApiKey', async (_, apiKey) => {
-  const config = await getConfig();
-  config.googleSpeechApiKey = apiKey;
-  await saveConfig(config);
-  return true;
-});
-
-ipcMain.handle('getSpeechService', async () => {
-  const config = await getConfig();
-  return config.speechService || 'whisper';
-});
-
-ipcMain.handle('saveSpeechService', async (_, service) => {
-  const config = await getConfig();
-  config.speechService = service;
-  await saveConfig(config);
-  return true;
-});
-
-// Add this handler for resume uploads
-ipcMain.handle('handle-resume-upload', async (_, filePath: string): Promise<string | null> => {
-  console.log(`Main: Received resume upload request for path: ${filePath}`);
-  try {
-    const fileExtension = path.extname(filePath).toLowerCase();
-    let textContent = null;
-
-    if (fileExtension === '.txt') {
-      textContent = await fsPromises.readFile(filePath, 'utf-8');
-      console.log('Main: Parsed .txt file');
-    } else if (fileExtension === '.pdf') {
-      const dataBuffer = await fsPromises.readFile(filePath);
-      const data = await pdf(dataBuffer);
-      textContent = data.text;
-      console.log('Main: Parsed .pdf file');
-    } else if (fileExtension === '.docx') {
-      const result = await mammoth.extractRawText({ path: filePath });
-      textContent = result.value;
-      console.log('Main: Parsed .docx file');
-    } else {
-      console.error(`Main: Unsupported file type: ${fileExtension}`);
-      throw new Error('Unsupported file type. Please upload .txt, .pdf, or .docx');
+    const store = getStoreInstance();
+    if (!store) {
+      safeError('Cannot synchronize configurations: store not initialized');
+      return;
     }
     
-    console.log(`Main: Extracted text length: ${textContent?.length ?? 0}`);
-    return textContent;
+    safeLog('Synchronizing configuration systems...');
+    
+    // Check current values
+    const configHelperService = configHelper.getSpeechService();
+    const configHelperGoogleApiKey = configHelper.getGoogleSpeechApiKey();
+    
+    const storeService = store.get('config.speechService');
+    const storeGoogleApiKey = store.get('config.googleSpeechApiKey');
+    
+    // Log current state
+    safeLog(`Current config - ConfigHelper: service=${configHelperService}, API key present=${!!configHelperGoogleApiKey}`);
+    safeLog(`Current config - Store: service=${storeService}, API key present=${!!storeGoogleApiKey}`);
+    
+    // Synchronize speech service
+    if (storeService && storeService !== configHelperService) {
+      safeLog(`Synchronizing speechService from store to ConfigHelper: ${storeService}`);
+      configHelper.setSpeechService(storeService);
+    } else if (configHelperService && configHelperService !== storeService) {
+      safeLog(`Synchronizing speechService from ConfigHelper to store: ${configHelperService}`);
+      store.set('config.speechService', configHelperService);
+    }
+    
+    // Synchronize Google API key
+    if (storeGoogleApiKey && storeGoogleApiKey !== configHelperGoogleApiKey) {
+      safeLog('Synchronizing Google API key from store to ConfigHelper');
+      configHelper.setGoogleSpeechApiKey(storeGoogleApiKey);
+    } else if (configHelperGoogleApiKey && configHelperGoogleApiKey !== storeGoogleApiKey) {
+      safeLog('Synchronizing Google API key from ConfigHelper to store');
+      store.set('config.googleSpeechApiKey', configHelperGoogleApiKey);
+    }
+    
+    safeLog('Configuration synchronization complete.');
   } catch (error) {
-    console.error(`Main: Error processing resume file ${filePath}:`, error);
-    // Optionally, return a specific error message or just null
-    // throw error; // Re-throwing sends the error object back, which might expose paths
-    return null; // Return null to indicate failure without exposing details
+    safeError('Error synchronizing configurations:', error);
   }
-});
+}
 
-// Initialize application
 async function initializeApp() {
   try {
     // Set custom cache directory to prevent permission issues
@@ -1199,7 +1201,15 @@ async function initializeApp() {
       
     loadEnvVariables()
     
-    // Ensure a configuration file exists
+    // --- Initialize Store EARLY --- 
+    const storeInitialized = await initializeStore();
+    if (!storeInitialized) {
+      safeError("FATAL: Store initialization failed. Application might not function correctly.");
+    } else {
+      safeLog("Store initialization completed.");
+    }
+    
+    // Ensure configuration exists
     if (!configHelper.hasApiKey()) {
       safeLog("No API key found in configuration. User will need to set up.")
     }
@@ -1235,133 +1245,6 @@ async function initializeApp() {
     })
     await createWindow()
 
-    // --- Test loading and calling the native macOS audio module ---
-    if (process.platform === 'darwin') { // Only run on macOS
-      try {
-        // Improved path resolution for native module with multiple fallback paths
-        const possibleModulePaths = [
-          // Production paths
-          path.join(process.resourcesPath, 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
-          
-          // Development paths
-          path.join(__dirname, '..', 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
-          path.join(process.cwd(), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
-          
-          // Additional fallbacks for different directory structures
-          path.join(app.getAppPath(), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node'),
-          path.join(path.dirname(app.getPath('exe')), 'native-modules', 'macos', 'build', 'Release', 'audio_capture_macos.node')
-        ];
-        
-        safeLog("Checking these paths for audio_capture_macos.node:");
-        possibleModulePaths.forEach(p => safeLog(' - ' + p));
-        
-        // Try each path until we find the module
-        let nativeAudio = null;
-        let modulePath = '';
-        
-        for (const candidatePath of possibleModulePaths) {
-          try {
-            if (fs.existsSync(candidatePath)) {
-              modulePath = candidatePath;
-              safeLog(`Found native module at: ${modulePath}`);
-              nativeAudio = require(modulePath);
-              break;
-            }
-          } catch (pathError) {
-            // Continue to the next path
-          }
-        }
-        
-        if (!nativeAudio) {
-          throw new Error(`Native module not found in any of the expected locations`);
-        }
-        
-        safeLog("Native macOS module loaded successfully.");
-
-        // --- Test Device Listing ---
-        const devices = nativeAudio.listDevices();
-        safeLog("Available Audio Devices (macOS):");
-        let targetDeviceUID = ""; // Store the UID to use for capture
-        if (Array.isArray(devices)) {
-            devices.forEach((device, index) => {
-                safeLog(`  [${index}] ID: ${device.id}, Name: ${device.name}`);
-                // Prioritize Microsoft Teams Audio driver if available
-                if (device.name.includes("Microsoft Teams Audio") || device.id.includes("MSLoopbackDriverDevice_UID")) {
-                    targetDeviceUID = device.id;
-                    safeLog(`Found Microsoft Teams Audio driver: ${device.name}`);
-                } else if (!targetDeviceUID && index === 0) {
-                    // Fallback to the first device if Teams driver not found
-                    targetDeviceUID = device.id;
-                }
-            });
-        } else {
-            safeLog(devices); // Log as is if not an array
-        }
-        // --------------------------
-
-        // --- Test Start/Stop Capture ---
-        if (!targetDeviceUID) {
-            safeError("No target device UID selected or found for capture test.");
-        } else {
-            safeLog(`Selected Target Device UID for capture: ${targetDeviceUID}`);
-            
-            const dummyDataCallback = (audioChunk: any) => {
-                try {
-                    // Later: This will receive ArrayBuffer data from the native side
-                    // For now, it might not be called until ThreadSafeFunction is set up
-                    if (Math.random() < 0.001) { // Add throttling to reduce log frequency
-                        safeLog("JavaScript dummyDataCallback received chunk " + 
-                              (audioChunk.data ? `(size: ${audioChunk.data.length} samples)` : "(no data)"));
-                    }
-
-                    // --- Add any actual processing logic here within the try block ---
-                    // Example: Access Float32Array data
-                    if (audioChunk && audioChunk.data) {
-                        const floatArray = audioChunk.data;
-                        // Send to renderer if needed
-                        // getMainWindow()?.webContents.send('audio-data', floatArray); // Example
-                    }
-                    // -------------------------------------------------------------
-
-                } catch (jsError) {
-                    safeError("Error inside JavaScript audio callback:", jsError);
-                }
-            };
-            
-            try {
-                safeLog("Attempting to start capture...");
-                const options = { generateTestTone: false }; // Set to true for testing without actual audio input
-                const startSuccess = nativeAudio.startCapture(dummyDataCallback, options);
-                
-                if (startSuccess) {
-                    safeLog("nativeAudio.startCapture call succeeded. Capture should be active.");
-
-                    // Schedule stop capture after a delay
-                    setTimeout(() => {
-                        try {
-                            safeLog("Attempting to stop capture...");
-                            nativeAudio.stopCapture();
-                            safeLog("nativeAudio.stopCapture call succeeded.");
-                        } catch (stopError) {
-                             safeError("Error calling nativeAudio.stopCapture:", stopError);
-                        }
-                    }, 5000); // Stop after 5 seconds
-
-                } else {
-                    safeLog("nativeAudio.startCapture call returned false (or threw).");
-                }
-            } catch(startError) {
-                safeError("Error calling nativeAudio.startCapture:", startError);
-            }
-        }
-        // ----------------------------
-
-      } catch (error) {
-        safeError("Failed to load or call native macOS audio module:", error);
-      }
-    }
-    // --- End test code ---
-
     state.shortcutsHelper?.registerGlobalShortcuts()
 
     // Initialize auto-updater regardless of environment
@@ -1376,6 +1259,8 @@ async function initializeApp() {
     app.quit()
   }
 }
+
+app.whenReady().then(initializeApp)
 
 // App event handlers
 app.on("open-url", (event, url) => {
@@ -1522,5 +1407,3 @@ export {
   getHasDebugged,
   toggleVoiceInput
 }
-
-app.whenReady().then(initializeApp)

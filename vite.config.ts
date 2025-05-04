@@ -4,6 +4,7 @@ import electron from "vite-plugin-electron"
 import react from "@vitejs/plugin-react"
 import path from "path"
 
+// Simplified configuration focusing only on externalization of Electron core modules
 export default defineConfig({
   plugins: [
     react(),
@@ -17,7 +18,16 @@ export default defineConfig({
             sourcemap: true,
             minify: false,
             rollupOptions: {
-              external: ["electron", "pdf-parse", "mammoth"]
+              external: [
+                'electron',
+                'pdf-parse',
+                'mammoth',
+                '@google-cloud/speech',
+                'node-vad',
+                'screenshot-desktop',
+                'electron-store',
+                'electron-updater'
+              ]
             }
           }
         }
@@ -29,34 +39,20 @@ export default defineConfig({
           build: {
             outDir: "dist-electron",
             sourcemap: true,
+            minify: false,
             rollupOptions: {
-              external: ["electron"]
+              external: [
+                'electron'
+              ]
             }
           }
         }
       }
     ])
   ],
-  base: process.env.NODE_ENV === "production" ? "./" : "/",
-  server: {
-    port: 54321,
-    strictPort: true,
-    watch: {
-      usePolling: true
-    },
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
-  build: {
-    outDir: "dist",
-    emptyOutDir: true,
-    sourcemap: true
-  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src")
     }
-  },
+  }
 })

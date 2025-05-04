@@ -134,9 +134,9 @@ export function initAutoUpdater() {
       await autoUpdater.downloadUpdate()
       safeLog("Update download completed")
       return { success: true }
-    } catch (error) {
+    } catch (error: unknown) {
       safeError("Failed to start update:", error)
-      return { success: false, error: error.message }
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
 

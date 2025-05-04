@@ -2,7 +2,6 @@
 import fs from "node:fs"
 import path from "node:path"
 import { app } from "electron"
-import { EventEmitter } from "events"
 import { OpenAI } from "openai"
 import axios from "axios"
 
@@ -14,6 +13,14 @@ interface Config {
   debuggingModel: string;
   language: string;
   opacity: number;
+  // Add speech service settings
+  speechService: "whisper" | "google";
+  googleSpeechApiKey: string;
+  // Add config object for nested settings from store.ts
+  config?: {
+    speechService?: "whisper" | "google";
+    googleSpeechApiKey?: string;
+  };
 }
 
 // Safe console logging to prevent EPIPE errors
@@ -54,7 +61,7 @@ const safeError = (...args: any[]) => {
   }
 };
 
-export class ConfigHelper extends EventEmitter {
+export class ConfigHelper {
   private configPath: string;
   private defaultConfig: Config = {
     apiKey: "",
@@ -63,11 +70,20 @@ export class ConfigHelper extends EventEmitter {
     solutionModel: "gemini-2.0-flash",
     debuggingModel: "gemini-2.0-flash",
     language: "python",
-    opacity: 1.0
+    opacity: 1.0,
+    // Add default speech service settings
+    speechService: "whisper",
+    googleSpeechApiKey: "",
+    // Initialize empty config object
+    config: {
+      speechService: "whisper",
+      googleSpeechApiKey: ""
+    }
   };
+  
+  private eventHandlers: {[key: string]: Function[]} = {};
 
   constructor() {
-    super();
     // Use the app's user data directory to store the config
     try {
       this.configPath = path.join(app.getPath('userData'), 'config.json');
@@ -79,6 +95,27 @@ export class ConfigHelper extends EventEmitter {
     
     // Ensure the initial config file exists
     this.ensureConfigExists();
+  }
+  
+  // Custom event emitter implementation
+  public on(event: string, handler: Function): void {
+    if (!this.eventHandlers[event]) {
+      this.eventHandlers[event] = [];
+    }
+    this.eventHandlers[event].push(handler);
+  }
+  
+  public emit(event: string, ...args: any[]): void {
+    const handlers = this.eventHandlers[event];
+    if (handlers) {
+      handlers.forEach(handler => {
+        try {
+          handler(...args);
+        } catch (err) {
+          safeError(`Error in event handler for ${event}:`, err);
+        }
+      });
+    }
   }
 
   /**
@@ -435,6 +472,14 @@ export class ConfigHelper extends EventEmitter {
   }
 
   /**
+   * Get the stored API key
+   */
+  public getApiKey(): string {
+    const config = this.loadConfig();
+    return config.apiKey || "";
+  }
+
+  /**
    * Specially get OpenAI API key - only returns the API key if the provider is OpenAI
    */
   public getOpenAIApiKey(): string {
@@ -444,6 +489,128 @@ export class ConfigHelper extends EventEmitter {
       return config.apiKey;
     }
     return ""; // Return empty string if not OpenAI
+  }
+
+  /**
+   * Get the speech service type (whisper or google)
+   */
+  public getSpeechService(): "whisper" | "google" {
+    const config = this.loadConfig();
+    // Check both places where the setting might be stored
+    return config.config?.speechService || config.speechService || "whisper";
+  }
+
+  /**
+   * Set the speech service type
+   */
+  public setSpeechService(service: "whisper" | "google"): void {
+    const updates: Partial<Config> = {
+      speechService: service,
+      config: { speechService: service }
+    };
+    this.updateConfig(updates);
+  }
+
+  /**
+   * Get the Google Speech API key
+   */
+  public getGoogleSpeechApiKey(): string {
+    const config = this.loadConfig();
+    // Check both places where the key might be stored
+    return config.config?.googleSpeechApiKey || config.googleSpeechApiKey || "";
+  }
+
+  /**
+   * Set the Google Speech API key
+   */
+  public setGoogleSpeechApiKey(apiKey: string): void {
+    const updates: Partial<Config> = {
+      googleSpeechApiKey: apiKey,
+      config: { googleSpeechApiKey: apiKey }
+    };
+    this.updateConfig(updates);
+  }
+
+  /**
+   * Test if the Google Speech API key is valid
+   */
+  public async testGoogleSpeechApiKey(): Promise<{valid: boolean, error?: string}> {
+    try {
+      const apiKey = this.getGoogleSpeechApiKey();
+      if (!apiKey) {
+        return { valid: false, error: 'Google Speech API key is not configured.' };
+      }
+
+      // Simple format validation
+      if (apiKey.length < 20) {
+        return { valid: false, error: 'Google API key appears to be too short. It should be at least 20 characters.' };
+      }
+
+      safeLog('Testing Google Speech API key validity...');
+      
+      // Make a simple API call to test the key - use a minimal request
+      try {
+        const response = await axios.post(
+          `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`,
+          {
+            config: {
+              encoding: 'LINEAR16',
+              sampleRateHertz: 16000,
+              languageCode: 'en-US',
+              model: 'command_and_search',
+            },
+            audio: {
+              content: 'AA==', // Minimal valid base64
+            },
+          },
+          { timeout: 10000 } // 10 second timeout
+        );
+
+        // We expect a 400 error from Google because our audio is invalid
+        // This means the API key is valid but our request format is wrong
+        safeLog('Unexpected 200 success from Google Speech API test');
+        return { valid: true };
+      } catch (error: any) {
+        // If we get a 400 error about invalid audio, the API key is valid
+        if (error.response?.status === 400 && 
+            (error.response.data?.error?.message?.includes('Invalid audio'))) {
+          safeLog('Valid API key but invalid audio (this is expected)');
+          return { valid: true };
+        }
+        
+        // Error 403 means API key is invalid
+        if (error.response?.status === 403) {
+          safeError('Google Speech API key invalid:', error.response.data);
+          return { 
+            valid: false, 
+            error: 'Invalid API key. Please verify your Google Cloud Speech-to-Text API key.' 
+          };
+        }
+        
+        // Network error means we can't reach Google's API
+        if (error.code === 'ECONNABORTED' || error.message?.includes('timeout') || !error.response) {
+          safeError('Network error testing Google Speech API:', error);
+          return { 
+            valid: false, 
+            error: 'Network error: Unable to connect to Google Speech API. Please check your internet connection.' 
+          };
+        }
+        
+        // Any other error - provide details
+        safeError('Error testing Google Speech API key:', error.response?.data || error.message);
+        return { 
+          valid: false, 
+          error: `API error: ${error.response?.data?.error?.message || error.message || 'Unknown error'}` 
+        };
+      }
+    } catch (error: any) {
+      safeError('Error testing Google Speech API key:', error);
+      
+      return { 
+        valid: false, 
+        error: `Error: ${error.message || 'Unknown error validating Google Speech API key'}` 
+      };
+    }
   }
 }
 

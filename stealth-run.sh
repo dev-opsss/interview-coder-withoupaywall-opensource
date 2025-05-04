@@ -41,6 +41,7 @@ echo "=== Step 4: Launching in stealth mode... ==="
 echo "Remember: Cmd+B to make it visible, Cmd+[ and Cmd+] to adjust opacity!"
 echo
 export NODE_ENV=production
+export FORCE_VISIBLE=true # Force window to be visible initially
 npx electron ./dist-electron/main.js &
 
 echo "App is now running invisibly! Press Cmd+B to make it visible."

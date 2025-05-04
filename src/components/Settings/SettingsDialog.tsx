@@ -182,6 +182,12 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const [open, setOpen] = useState(externalOpen || false);
   const [apiKey, setApiKey] = useState("");
   const [apiProvider, setApiProvider] = useState<APIProvider>("openai");
+  
+  // Track separate API keys for each provider
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  
   const [extractionModel, setExtractionModel] = useState("gpt-4o");
   const [solutionModel, setSolutionModel] = useState("gpt-4o");
   const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
@@ -189,6 +195,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const { showToast } = useToast();
   const [googleApiKey, setGoogleApiKey] = useState('');
   const [speechService, setSpeechService] = useState('whisper');
+  const [isTestingGoogleKey, setIsTestingGoogleKey] = useState(false);
 
   // Sync with external open state
   useEffect(() => {
@@ -218,11 +225,29 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         debuggingModel?: string;
       }
 
+      // Load main API config
       window.electronAPI
         .getConfig()
         .then((config: Config) => {
-          setApiKey(config.apiKey || "");
-          setApiProvider(config.apiProvider || "openai");
+          const currentProvider = config.apiProvider || "openai";
+          const currentKey = config.apiKey || "";
+          
+          // Set provider
+          setApiProvider(currentProvider);
+          
+          // Store the key in the appropriate state variable based on provider
+          if (currentProvider === "openai") {
+            setOpenaiApiKey(currentKey);
+          } else if (currentProvider === "gemini") {
+            setGeminiApiKey(currentKey);
+          } else if (currentProvider === "anthropic") {
+            setAnthropicApiKey(currentKey);
+          }
+          
+          // Set current API key
+          setApiKey(currentKey);
+          
+          // Set models
           setExtractionModel(config.extractionModel || "gpt-4o");
           setSolutionModel(config.solutionModel || "gpt-4o");
           setDebuggingModel(config.debuggingModel || "gpt-4o");
@@ -234,6 +259,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         .finally(() => {
           setIsLoading(false);
         });
+        
+      // Load speech service config
+      loadSpeechSettings();
     }
   }, [open, showToast]);
 
@@ -241,19 +269,36 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const handleProviderChange = (provider: APIProvider) => {
     setApiProvider(provider);
     
-    // Reset models to defaults when changing provider
+    // Update current API key based on the selected provider
     if (provider === "openai") {
+      setApiKey(openaiApiKey);
       setExtractionModel("gpt-4o");
       setSolutionModel("gpt-4o");
       setDebuggingModel("gpt-4o");
     } else if (provider === "gemini") {
+      setApiKey(geminiApiKey);
       setExtractionModel("gemini-1.5-pro");
       setSolutionModel("gemini-1.5-pro");
       setDebuggingModel("gemini-1.5-pro");
     } else if (provider === "anthropic") {
+      setApiKey(anthropicApiKey);
       setExtractionModel("claude-3-7-sonnet-20250219");
       setSolutionModel("claude-3-7-sonnet-20250219");
       setDebuggingModel("claude-3-7-sonnet-20250219");
+    }
+  };
+
+  // Handle API key change
+  const handleApiKeyChange = (newKey: string) => {
+    setApiKey(newKey);
+    
+    // Update the provider-specific key state
+    if (apiProvider === "openai") {
+      setOpenaiApiKey(newKey);
+    } else if (apiProvider === "gemini") {
+      setGeminiApiKey(newKey);
+    } else if (apiProvider === "anthropic") {
+      setAnthropicApiKey(newKey);
     }
   };
 
@@ -296,40 +341,72 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
     window.electronAPI.openLink(url);
   };
 
-  useEffect(() => {
-    const loadSettings = async () => {
-      setIsLoading(true);
-      try {
-        const apiKey = await window.electronAPI.getGoogleSpeechApiKey() || '';
-        const service = await window.electronAPI.getSpeechService() || 'whisper';
-        
-        setGoogleApiKey(apiKey);
-        setSpeechService(service);
-      } catch (error) {
-        console.error('Failed to load speech settings:', error);
-      } finally {
-        setIsLoading(false);
+  // Test Google Speech API key
+  const testGoogleSpeechApiKey = async () => {
+    try {
+      setIsTestingGoogleKey(true);
+      // First save the key to ensure we're testing the current input value
+      await window.electronAPI.saveGoogleSpeechApiKey(googleApiKey);
+      
+      // Use invoke with the correct channel name
+      const result = await window.electronAPI.invoke('testGoogleSpeechApiKey');
+      
+      if (result && result.valid) {
+        showToast("Success", "Google Speech API key is valid", "success");
+      } else {
+        const errorMessage = result?.error || "Google Speech API key is invalid";
+        showToast("Error", errorMessage, "error");
       }
-    };
+    } catch (error) {
+      console.error("Error testing Google Speech API key:", error);
+      showToast("Error", "Failed to test Google Speech API key", "error");
+    } finally {
+      setIsTestingGoogleKey(false);
+    }
+  };
+  
+  // Load speech service settings
+  const loadSpeechSettings = async () => {
+      try {
+      const googleApiKey = await window.electronAPI.getGoogleSpeechApiKey();
+      const speechService = await window.electronAPI.getSpeechService();
+        
+      setGoogleApiKey(googleApiKey || '');
+      setSpeechService(speechService || 'whisper');
+      } catch (error) {
+      console.error("Failed to load speech settings:", error);
+    }
+  };
 
-    loadSettings();
-  }, []);
-
+  // Save speech service settings
   const handleSaveSpeechSettings = async () => {
     try {
       // Trim the API key to remove any accidental whitespace
       const trimmedGoogleApiKey = googleApiKey.trim();
       
+      console.log(`Saving speech service: ${speechService}`);
       console.log(`Saving Google Speech API key: ${trimmedGoogleApiKey ? 'Yes (length: ' + trimmedGoogleApiKey.length + ')' : 'No'}`);
       
-      // Additional validation for Google API key format
+      // If user selected Google Speech but provided no API key, show warning
+      if (speechService === 'google' && !trimmedGoogleApiKey) {
+        showToast('Warning', 'You selected Google Speech but provided no API key. Speech-to-text will not work.', 'error');
+        // Still save the selection though
+      }
+      
+      // Additional validation for Google API key format if provided
       if (speechService === 'google' && trimmedGoogleApiKey) {
+        if (trimmedGoogleApiKey.length < 20) {
+          showToast('Warning', 'Google API key appears too short. Please verify your key.', 'error');
+          return;
+        }
+        
         if (!trimmedGoogleApiKey.match(/^[A-Za-z0-9_-]+$/)) {
-          showToast('Warning', 'Google API key contains invalid characters', 'error');
+          showToast('Warning', 'Google API key contains invalid characters. Please verify your key.', 'error');
           return;
         }
       }
       
+      // Save settings
       await window.electronAPI.saveGoogleSpeechApiKey(trimmedGoogleApiKey);
       await window.electronAPI.saveSpeechService(speechService);
       
@@ -337,39 +414,17 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       
       // Give feedback about next steps
       if (speechService === 'google' && trimmedGoogleApiKey) {
-        showToast('Info', 'Please ensure the Speech-to-Text API is enabled in your Google Cloud project', 'neutral');
+        showToast('Note', 'Please ensure the Speech-to-Text API is enabled in your Google Cloud project', 'neutral');
+      } else if (speechService === 'whisper') {
+        // Remind users that Whisper requires an OpenAI API key
+        const openAIKey = apiProvider === 'openai' ? apiKey : openaiApiKey;
+        if (!openAIKey) {
+          showToast('Warning', 'Whisper requires an OpenAI API key to be configured', 'error');
+        }
       }
     } catch (error) {
       console.error('Failed to save speech settings:', error);
       showToast('Error', 'Failed to save speech settings', 'error');
-    }
-  };
-
-  // Add function to test Google API key
-  const testGoogleApiKey = async () => {
-    try {
-      if (!googleApiKey.trim()) {
-        showToast('Error', 'Please enter a Google Speech API key first', 'error');
-        return;
-      }
-      
-      showToast('Testing', 'Testing Google Speech API key...', 'neutral');
-      
-      // Create a test instance of GoogleSpeechService
-      const testService = new GoogleSpeechService();
-      testService.setApiKey(googleApiKey.trim());
-      
-      // Test the API key
-      const isValid = await testService.testApiKey();
-      
-      if (isValid) {
-        showToast('Success', 'Google Speech API key is valid!', 'success');
-      } else {
-        showToast('Error', 'Google Speech API key is invalid or not configured for Speech-to-Text', 'error');
-      }
-    } catch (error) {
-      console.error('Error testing Google API key:', error);
-      showToast('Error', 'Failed to test Google API key', 'error');
     }
   };
 
@@ -479,7 +534,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
               id="apiKey"
               type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => handleApiKeyChange(e.target.value)}
               placeholder={
                 apiProvider === "openai" ? "sk-..." : 
                 apiProvider === "gemini" ? "Enter your Gemini API key" :
@@ -487,13 +542,35 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
               }
               className="bg-black/50 border-white/10 text-white"
             />
-            {apiKey && (
-              <p className="text-xs text-white/50">
-                Current: {maskApiKey(apiKey)}
+            {/* Display appropriate label and masked key for each provider */}
+            {apiProvider === "openai" && openaiApiKey && (
+              <p className="text-xs text-white/50 flex items-center">
+                <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
+                  OpenAI
+                </span>
+                {maskApiKey(openaiApiKey)}
+              </p>
+            )}
+            {apiProvider === "gemini" && geminiApiKey && (
+              <p className="text-xs text-white/50 flex items-center">
+                <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
+                  Gemini
+                </span>
+                {maskApiKey(geminiApiKey)}
+              </p>
+            )}
+            {apiProvider === "anthropic" && anthropicApiKey && (
+              <p className="text-xs text-white/50 flex items-center">
+                <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
+                  Claude
+                </span>
+                {maskApiKey(anthropicApiKey)}
               </p>
             )}
             <p className="text-xs text-white/50">
-              Your API key is stored locally and never sent to any server except {apiProvider === "openai" ? "OpenAI" : "Google"}
+              Your API key is stored locally and never sent to any server except {apiProvider === "openai" ? "OpenAI" : 
+              apiProvider === "gemini" ? "Google" : 
+              "Anthropic"}
             </p>
             <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
               <p className="text-xs text-white/80 mb-1">Don't have an API key?</p>
@@ -644,58 +721,140 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             })}
           </div>
         </div>
-        <div className="space-y-4 pt-4 border-t">
-          <h3 className="text-lg font-medium">Speech-to-Text Settings</h3>
+        <div className="space-y-4 pt-4 border-t border-white/10">
+          <h3 className="text-lg font-medium text-white">Speech-to-Text Settings</h3>
           
           <div className="space-y-3">
-            <div>
-              <label className="block text-sm font-medium mb-1">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-white">
                 Speech Service
               </label>
-              <select
-                className="w-full p-2 border rounded-md bg-white dark:bg-gray-800"
-                value={speechService}
-                onChange={(e) => setSpeechService(e.target.value)}
-                disabled={isLoading}
-              >
-                <option value="whisper">OpenAI Whisper</option>
-                <option value="google">Google Cloud Speech-to-Text</option>
-              </select>
+              <div className="flex gap-2">
+                <div
+                  className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${
+                    speechService === "whisper"
+                      ? "bg-white/10 border border-white/20"
+                      : "bg-black/30 border border-white/5 hover:bg-white/5"
+                  }`}
+                  onClick={() => setSpeechService("whisper")}
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-3 h-3 rounded-full ${
+                        speechService === "whisper" ? "bg-white" : "bg-white/20"
+                      }`}
+                    />
+                    <div className="flex flex-col">
+                      <p className="font-medium text-white text-sm">OpenAI Whisper</p>
+                      <p className="text-xs text-white/60">Uses your OpenAI API key</p>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${
+                    speechService === "google"
+                      ? "bg-white/10 border border-white/20"
+                      : "bg-black/30 border border-white/5 hover:bg-white/5"
+                  }`}
+                  onClick={() => setSpeechService("google")}
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-3 h-3 rounded-full ${
+                        speechService === "google" ? "bg-white" : "bg-white/20"
+                      }`}
+                    />
+                    <div className="flex flex-col">
+                      <p className="font-medium text-white text-sm">Google Speech</p>
+                      <p className="text-xs text-white/60">Requires separate API key</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
             
             {speechService === 'google' && (
               <div>
-                <label className="block text-sm font-medium mb-1">
+                <label className="text-sm font-medium text-white mb-1">
                   Google Cloud Speech-to-Text API Key
                 </label>
-                <input
+                <Input
                   type="password"
                   placeholder="Enter your Google Cloud API Key"
-                  className="w-full p-2 border rounded-md bg-white dark:bg-gray-800"
+                  className="bg-black/50 border-white/10 text-white"
                   value={googleApiKey}
                   onChange={(e) => setGoogleApiKey(e.target.value)}
                   disabled={isLoading}
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  This API key must have access to the Speech-to-Text API in your Google Cloud project.
-                  <button 
-                    onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/apis/library/speech.googleapis.com')}
-                    className="text-blue-500 underline ml-1"
-                  >
-                    Enable API
-                  </button>
-                </p>
-                <div className="flex justify-between items-center mt-2">
-                  <button
-                    onClick={testGoogleApiKey}
-                    className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
-                    disabled={isLoading || !googleApiKey.trim()}
-                  >
-                    Test API Key
-                  </button>
+                {googleApiKey && (
+                  <p className="text-xs text-white/50 flex items-center mt-1">
+                    <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
+                      Google Speech
+                    </span>
+                    {maskApiKey(googleApiKey)}
+                  </p>
+                )}
+                
+                <div className="mt-3 p-2 rounded-md bg-white/5 border border-white/10">
+                  <p className="text-xs text-white/80 mb-1">Setting up Google Speech-to-Text:</p>
+                  <ol className="text-xs text-white/60 ml-4 space-y-1 list-decimal">
+                    <li>
+                      Create a Google Cloud account if you don't have one
+                      <button 
+                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/freetrial')}
+                        className="text-blue-400 hover:underline ml-1"
+                      >
+                        Sign Up
+                      </button>
+                    </li>
+                    <li>
+                      Create a new project in Google Cloud Console
+                      <button 
+                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/projectcreate')}
+                        className="text-blue-400 hover:underline ml-1"
+                      >
+                        Create Project
+                      </button>
+                    </li>
+                    <li>
+                      Enable the Speech-to-Text API for your project
+                      <button 
+                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/apis/library/speech.googleapis.com')}
+                        className="text-blue-400 hover:underline ml-1"
+                      >
+                        Enable API
+                      </button>
+                    </li>
+                    <li>
+                      Create an API key and paste it here
+                      <button 
+                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/apis/credentials')}
+                        className="text-blue-400 hover:underline ml-1"
+                      >
+                        Create Key
+                      </button>
+                    </li>
+                  </ol>
+                  <p className="text-xs text-white/60 mt-2">
+                    <span className="text-yellow-400">Important:</span> Google Cloud offers a free tier with $300 credit for new accounts. Standard Speech-to-Text usage is 
+                    <a 
+                      href="https://cloud.google.com/speech-to-text/pricing" 
+                      className="text-blue-400 hover:underline mx-1"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        window.electronAPI.openLink('https://cloud.google.com/speech-to-text/pricing');
+                      }}
+                    >
+                      $0.006 per 15 seconds
+                    </a>
+                    of audio.
+                  </p>
+                </div>
+                
+                <div className="flex justify-end items-center mt-2">
                   <button
                     onClick={() => window.electronAPI.openLink('https://cloud.google.com/speech-to-text/docs/quickstart')}
-                    className="text-blue-500 underline text-xs"
+                    className="text-blue-400 hover:underline text-xs"
                   >
                     View Documentation
                   </button>
@@ -704,26 +863,38 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             )}
           </div>
           
-          <div className="flex justify-end">
-            <button
+          {/* Speech section buttons */}
+          <div className="flex justify-end space-x-2 mt-4">
+            {/* Test Google API Key button */}
+            {speechService === 'google' && googleApiKey && (
+              <Button
+                onClick={testGoogleSpeechApiKey}
+                className="px-4 py-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-xl font-medium"
+                disabled={isTestingGoogleKey || !googleApiKey}
+              >
+                {isTestingGoogleKey ? "Testing..." : "Test Google API Key"}
+              </Button>
+            )}
+            
+            {/* Save Speech Settings button */}
+            <Button
               onClick={handleSaveSpeechSettings}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+              className="px-4 py-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-xl font-medium"
               disabled={isLoading}
             >
               Save Speech Settings
-            </button>
+            </Button>
           </div>
         </div>
         <DialogFooter className="flex justify-between sm:justify-between">
           <Button
-            variant="outline"
             onClick={() => handleOpenChange(false)}
-            className="border-white/10 hover:bg-white/5 text-white"
+            className="px-4 py-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-xl font-medium"
           >
             Cancel
           </Button>
           <Button
-            className="px-4 py-3 bg-white text-black rounded-xl font-medium hover:bg-white/90 transition-colors"
+            className="px-4 py-2 bg-white text-black rounded-xl font-medium hover:bg-white/90 transition-colors"
             onClick={handleSave}
             disabled={isLoading || !apiKey}
           >
