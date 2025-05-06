@@ -3,6 +3,7 @@ import { AiPersonalitySettingsModal } from './AiPersonalitySettingsModal';
 import { availablePersonalities, DEFAULT_PERSONALITY } from '../constants/aiConstants';
 import { useSmartVoiceDetection } from '../hooks/useSmartVoiceDetection';
 import { TranscriptDisplay } from './TranscriptDisplay';
+import { toast } from 'react-hot-toast';
 
 // Define types for props
 interface VoiceTranscriptionPanelProps {
@@ -19,11 +20,16 @@ interface VoiceTranscriptionPanelProps {
 
 // Interface for transcript entries
 interface TranscriptEntry {
+  id: string;
   speaker: 'user' | 'interviewer';
   text: string;
   timestamp: number;
-  words?: { word: string, startTime: number, endTime: number }[];
+  isFinal: boolean;
+  words?: Array<{ word: string; startTime: number; endTime: number }>;
 }
+
+// Update VoiceStatus type to include 'error'
+type VoiceStatus = 'idle' | 'listening' | 'speaking' | 'processing' | 'error';
 
 export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = ({
   speechService,
@@ -50,7 +56,9 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   
   // --- Auto Mode States ---
   const [autoMode, setAutoMode] = useState<boolean>(false);
-  const [voiceStatus, setVoiceStatus] = useState<'idle' | 'listening' | 'speaking' | 'processing'>('idle');
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
 
   // --- Speaker Detection ---
   const [speakerRole, setSpeakerRole] = useState<'user' | 'interviewer'>('user');
@@ -59,166 +67,148 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   const [selectedSpeakerDeviceId, setSelectedSpeakerDeviceId] = useState<string | null>(null);
   const [selectedMicrophoneDeviceId, setSelectedMicrophoneDeviceId] = useState<string | null>(null);
   
-  // --- State for displaying transcript --- 
-  const [displayTranscript, setDisplayTranscript] = useState('');
+  // --- State for transcript entries (primary transcript state) ---
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
   const [lastSpeaker, setLastSpeaker] = useState<'user' | 'interviewer' | null>(null);
+
+  // --- Ref to track if devices are loaded ---
+  const devicesLoadedRef = useRef<boolean>(false);
+
+  // --- Function to fetch AI personality settings ---
+  const fetchSettings = useCallback(async () => {
+    try {
+      console.log("Fetching AI settings...");
+      const settings = await window.electronAPI?.getAISettings();
+      if (settings) {
+        console.log("Loaded AI settings:", settings);
+        setSelectedPersonality(settings.personality || DEFAULT_PERSONALITY);
+        setInterviewStage(settings.interviewStage || 'Initial Screening');
+        setUserPreferences(settings.userPreferences || '');
+      } else {
+         console.log("No saved AI settings found, using defaults.");
+         setSelectedPersonality(DEFAULT_PERSONALITY);
+      }
+    } catch (error) {
+      console.error("Failed to fetch AI settings:", error);
+      toast.error('Could not load AI settings.');
+    }
+  }, []); // Empty dependency array, fetch once concept
+
+  // --- END: Audio Device Handling ---
+
+  // Generate suggestions for responses
+  const generateSuggestion = useCallback(async (text: string, role: 'user' | 'interviewer') => {
+    console.log(`Generating suggestion for ${role} speech: ${text}`);
+    setIsGeneratingResponse(true);
+    setSuggestedResponse(''); // Clear previous
+    
+    try {
+      // Create the payload for suggestion generation
+      const payload = {
+        question: text, 
+        jobContext: jobContext,
+        resumeTextContent: resumeTextContent,
+        speakerRole: role 
+      };
+      
+      console.log("Requesting response suggestion with payload:", payload);
+      const suggestionResult = await window.electronAPI.generateResponseSuggestion(payload);
+
+      if (suggestionResult && suggestionResult.success && suggestionResult.data) {
+        setSuggestedResponse(suggestionResult.data);
+        if (window.electronAPI.autoResponseGenerated) {
+          window.electronAPI.autoResponseGenerated(suggestionResult.data);
+        }
+        console.log("Response suggestion generated successfully");
+      } else {
+        console.error("Response suggestion generation failed:", suggestionResult?.error);
+        setSuggestedResponse(`Error: ${suggestionResult?.error || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      console.error("Error generating suggestion:", error);
+      setSuggestedResponse(`Error: ${error.message || error}`);
+    } finally {
+      setIsGeneratingResponse(false);
+    }
+  }, [jobContext, resumeTextContent]);
 
   // --- Handlers for VAD events (passed to the hook) ---
   const handleDetectedSpeechStart = useCallback((role: 'user' | 'interviewer') => {
     console.log(`VoiceTranscriptionPanel: Detected speech start from: ${role}`);
     setVoiceStatus('speaking');
     setLastSpeaker(role); // Set who started speaking
+    setSpeakerRole(role); // Automatically update speaker role based on active device
   }, []);
 
+  const handleDetectedSpeechEnd = useCallback(() => {
+    console.log('VoiceTranscriptionPanel: Detected speech end');
+    setVoiceStatus('listening');
+  }, []);
+
+  // Handle a speech segment (audio blob) from the voice detection hook
   const handleSpeechSegment = useCallback(async (audioBlob: Blob, role: 'user' | 'interviewer') => {
-    console.log(`VoiceTranscriptionPanel: Received speech segment from ${role}, size: ${audioBlob.size}`);
+    console.log(`---> VTP: handleSpeechSegment called for ${role}, size: ${audioBlob.size}`);
     setVoiceStatus('processing');
+    setLastError(null); 
     try {
       // Convert Blob to ArrayBuffer for sending over IPC
       const arrayBuffer = await audioBlob.arrayBuffer();
       
-      // Create transcription payload with MIME type to help with format detection
-      const transcribePayload = {
-        buffer: arrayBuffer,
-        mimeType: audioBlob.type || 'audio/mpeg' // Default to mp3 if not set
-      };
-      
-      // Call the transcription API
-      const result = await window.electronAPI.transcribeAudio(transcribePayload);
-      
-      if (result && result.success && result.text) {
-        const transcribedText = result.text;
-        console.log(`${role} Transcription: "${transcribedText}"`);
-        
-        // Create a new transcript entry
-        const newEntry: TranscriptEntry = {
-          speaker: role,
-          text: transcribedText,
-          timestamp: Date.now()
-        };
-        
-        // Add word timing information if available
-        if (result.words && Array.isArray(result.words)) {
-          console.log(`Adding ${result.words.length} words with timing information`);
-          newEntry.words = result.words;
-        }
-        
-        // Update transcript entries
-        setTranscriptEntries(prev => [...prev, newEntry]);
-        
-        // Also update text-only transcript for backward compatibility
-        setDisplayTranscript(prev => `${prev}${role === 'user' ? 'You' : 'Interviewer'}: ${transcribedText}\n`); 
-      } else {
-        console.error(`${role} Transcription failed:`, result?.error);
-        // Get error details but don't show in transcript
-        const errorText = result?.error || 'Unknown transcription error';
-        
-        // Show alert for major errors that require user action
-        if (errorText.includes('API key')) {
-          alert(`Speech-to-text error: ${errorText}\n\nPlease check your speech service settings and API key.`);
-        } else {
-          // Only log to console, don't add to transcript
-          console.warn(`Transcription error (not shown in UI): ${errorText}`);
-        }
-      }
+      // Send audio data to main process via the SpeechBridge channel
+      console.log(`---> VTP: Sending audio:chunk (size: ${arrayBuffer.byteLength})`);
+      window.electronAPI?.send('speech:audio-data', arrayBuffer);
+      // Note: We no longer expect a direct response here. Updates come via onTranscriptionReceived.
+      setVoiceStatus('idle'); // Reset status after sending
+
     } catch (error) {
-      console.error(`Error during ${role} transcription IPC:`, error);
-      
-      // Don't add IPC errors to transcript either
-      console.warn("IPC Error (not shown in UI): Transcription service unavailable");
-    } finally {
-      // Go back to listening state unless generating suggestion
-      if (!isGeneratingResponse) {
-          setVoiceStatus('listening');
-      }
+      console.error("Error handling speech segment:", error);
+      setVoiceStatus('error');
+      toast.error("Error processing audio segment.");
     }
-  }, [isGeneratingResponse]);
+  }, []);
 
+  // Helper function to calculate text similarity (Levenshtein distance based)
+  const calculateTextSimilarity = (text1: string, text2: string): number => {
+    // Simple normalization: lowercase and remove punctuation
+    const normalize = (text: string) => text.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
+    
+    const s1 = normalize(text1);
+    const s2 = normalize(text2);
+    
+    // If either string is empty, return 0 similarity
+    if (!s1.length || !s2.length) return 0;
+    
+    // If strings are identical after normalization, return 1 (100% similar)
+    if (s1 === s2) return 1;
+    
+    // If one is a substring of the other, calculate partial match
+    if (s1.includes(s2) || s2.includes(s1)) {
+      const ratio = Math.min(s1.length, s2.length) / Math.max(s1.length, s2.length);
+      return 0.5 + (ratio * 0.5); // Range between 0.5 and 1.0 for substring matches
+    }
+    
+    // For different strings, do word-level comparison
+    const words1 = s1.split(/\s+/);
+    const words2 = s2.split(/\s+/);
+    
+    // Count matching words
+    const commonWords = words1.filter(word => words2.includes(word));
+    const matchRatio = 2 * commonWords.length / (words1.length + words2.length);
+    
+    return matchRatio;
+  };
+
+  // Handle silence after speech (used for final segments and suggestions)
   const handleSilenceAfterSpeech = useCallback(async (audioBlob: Blob, role: 'user' | 'interviewer') => {
-    console.log(`VoiceTranscriptionPanel: Silence detected after ${role} speech. Blob size: ${audioBlob.size}`);
-    if (!autoMode) return; // Only trigger auto-suggestions in auto mode
+    console.log(`---> VTP: handleSilenceAfterSpeech called for ${role}, size: ${audioBlob.size}`);
+  }, []); // No dependencies needed anymore
 
-    setIsGeneratingResponse(true);
-    setVoiceStatus('processing');
-    setSuggestedResponse(''); // Clear previous
-
-    try {
-      // Convert Blob to ArrayBuffer for sending over IPC
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      
-      // Create transcription payload with MIME type to help with format detection
-      const transcribePayload = {
-        buffer: arrayBuffer,
-        mimeType: audioBlob.type || 'audio/mpeg' // Default to mp3 if not set
-      };
-      
-      // Transcribe the final blob first (might be redundant if handleSpeechSegment did it)
-      const transcriptionResult = await window.electronAPI.transcribeAudio(transcribePayload);
-      
-      if (transcriptionResult && transcriptionResult.success && transcriptionResult.text) {
-         const transcribedText = transcriptionResult.text;
-         console.log(`${role} Final Transcription (after silence): "${transcribedText}"`);
-         
-         // Create a new transcript entry
-         const newEntry: TranscriptEntry = {
-           speaker: role,
-           text: transcribedText,
-           timestamp: Date.now()
-         };
-         
-         // Add word timing information if available
-         if (transcriptionResult.words && Array.isArray(transcriptionResult.words)) {
-           console.log(`Adding ${transcriptionResult.words.length} words with timing information to final transcription`);
-           newEntry.words = transcriptionResult.words;
-         }
-         
-         // Update transcript entries
-         setTranscriptEntries(prev => [...prev, newEntry]);
-         
-         // Update display transcript one last time for this segment
-         setDisplayTranscript(prev => `${prev}${role === 'user' ? 'You' : 'Interviewer'}: ${transcribedText}\n`); 
-
-         // Now request the suggestion
-         const payload = {
-           question: transcribedText, 
-           jobContext: jobContext,
-           resumeTextContent: resumeTextContent,
-           speakerRole: role 
-         };
-         console.log("Auto-requesting response suggestion with payload:", payload);
-         const suggestionResult = await window.electronAPI.generateResponseSuggestion(payload);
-
-         if (suggestionResult && suggestionResult.success && suggestionResult.data) {
-           setSuggestedResponse(suggestionResult.data);
-           if (window.electronAPI.updateAssistanceDisplay) {
-             window.electronAPI.updateAssistanceDisplay(suggestionResult.data);
-           }
-           console.log("Auto-response generated successfully");
-         } else {
-           console.error("Auto-response generation failed:", suggestionResult?.error);
-           // Set message in suggestion area (not in transcript)
-           setSuggestedResponse(`Error: ${suggestionResult?.error || 'Unknown error'}`);
-         }
-      } else {
-         console.error(`${role} Transcription failed (after silence):`, transcriptionResult?.error);
-         // Don't add error to transcript, just set it in the suggestion area
-         setSuggestedResponse(`Transcription Error: ${transcriptionResult?.error || 'Unknown error'}`);
-      }
-    } catch (error: any) {
-      console.error("Error in auto-suggestion processing:", error);
-      // Set error message in suggestion area only
-      setSuggestedResponse(`Error: ${error.message || error}`);
-    } finally {
-      setIsGeneratingResponse(false);
-      setVoiceStatus('listening'); // Go back to listening after processing
-    }
-  }, [autoMode, jobContext, resumeTextContent]);
-
-  // --- Instantiate the hook directly --- 
+  // Combined speaking state to expose from the hook
   const {
     isListening,
     isSpeaking, // Combined state reflects if *either* mic is active
+    isUserSpeaking, // Add these states to use for UI indicators
+    isSpeakerSpeaking,
     startListening,
     stopListening,
   } = useSmartVoiceDetection({
@@ -227,92 +217,70 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
     onSpeechStart: handleDetectedSpeechStart,
     onSpeechEnd: handleSpeechSegment, // Call handler for each speech segment end
     onSilenceAfterSpeech: handleSilenceAfterSpeech, // Call handler after silence
-    autoSuggest: true 
+    autoSuggest: autoMode 
   });
 
-  // --- Fetch initial settings on mount ---
+  // Automatically start listening if auto mode is enabled
   useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const settings = await window.electronAPI.invoke('get-ai-settings');
-        if (settings) {
-          setSelectedPersonality(settings.personality || DEFAULT_PERSONALITY);
-          setInterviewStage(settings.interviewStage || 'Initial Screening');
-          setUserPreferences(settings.userPreferences || '');
-          // Initialize auto mode from settings if available
-          if (settings.autoMode !== undefined) {
-            setAutoMode(settings.autoMode);
-            // We don't start listening here because startListening might not be available yet
-          }
-        }
-      } catch (error) {
-        console.error("Failed to fetch AI settings:", error);
-        // Keep defaults if fetch fails
-      }
-    };
-    fetchSettings();
-
-    // --- NEW: Fetch Audio Devices & Settings ---
-    const fetchAudioDevicesAndSettings = async () => {
-      try {
-        // Request permission first (needed for device labels)
-        await navigator.mediaDevices.getUserMedia({ audio: true }); 
-        // Enumerate devices
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(device => device.kind === 'audioinput');
-        setAudioInputDevices(audioInputs);
-        setSpeakerAudioInputDevices(audioInputs);
-        console.log('Available audio input devices (for both dropdowns):', audioInputs);
-
-        // Load saved settings
-        const savedSettings = await window.electronAPI.getAudioDeviceSettings();
-        if (savedSettings) {
-          console.log('Loaded audio device settings:', savedSettings);
-          // Validate saved IDs against current list
-          const isValidSpeaker = audioInputs.some(d => d.deviceId === savedSettings.speakerDeviceId);
-          const isValidMic = audioInputs.some(d => d.deviceId === savedSettings.microphoneDeviceId);
-          setSelectedSpeakerDeviceId(isValidSpeaker ? savedSettings.speakerDeviceId : (audioInputs[0]?.deviceId || null));
-          setSelectedMicrophoneDeviceId(isValidMic ? savedSettings.microphoneDeviceId : (audioInputs[0]?.deviceId || null));
-        } else {
-          // Set defaults if no settings saved (e.g., first device for both initially)
-          if (audioInputs.length > 0) {
-             setSelectedSpeakerDeviceId(audioInputs[0].deviceId);
-             setSelectedMicrophoneDeviceId(audioInputs[0].deviceId);
-             console.log('Setting default audio devices to first available for both speaker and mic.');
-          }
-        }
-      } catch (error) {
-        console.error("Failed to fetch audio devices or settings:", error);
-        // Handle error - maybe show a message to the user
-      }
-    };
-    fetchAudioDevicesAndSettings();
-
-    // Listener for device changes (optional but recommended)
-    const handleDeviceChange = async () => {
-      console.log('Audio devices changed, re-fetching...');
-      // Re-run the fetch logic
-      await fetchAudioDevicesAndSettings();
-    };
-    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
-
-    // Cleanup listener
-    return () => {
-      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
-    };
-    // --- END: Fetch Audio Devices & Settings ---
-
-  }, []); // Empty dependency array means run once on mount
-
-  // New effect to handle auto mode activation after component is fully mounted
-  useEffect(() => {
-    // Only run this effect when the component is fully mounted and ready
-    if (autoMode) {
-      console.log('Auto mode is enabled on mount, starting listening...');
+    // Only run if auto mode is enabled AND devices have been loaded
+    if (autoMode && devicesLoadedRef.current && !isListening) {
+      console.log("Auto mode is enabled and devices are loaded, starting listening...");
       startListening();
       setVoiceStatus('listening');
     }
-  }, [autoMode, startListening]); // Dependencies ensure it runs when these values change
+    // Add isListening to dependencies to restart if it stops unexpectedly
+  }, [autoMode, isListening, startListening]); 
+
+  // --- Fetch Audio Devices and Load Settings ---
+  useEffect(() => {
+    const fetchAudioDevicesAndSettings = async () => {
+      console.log("Fetching audio devices and settings...");
+      setLastError(null);
+      try {
+        // Request permissions early
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        console.log(`Found ${devices.length} media devices`);
+        
+        const inputDevices = devices.filter(d => d.kind === 'audioinput');
+        setAudioInputDevices(inputDevices);
+        setSpeakerAudioInputDevices(inputDevices); // Use input devices for speaker VAD too
+        
+        // Load saved device IDs from config
+        const savedMicId = await window.electronAPI?.loadSetting('selectedMicrophoneDeviceId');
+        const savedSpeakerId = await window.electronAPI?.loadSetting('selectedSpeakerDeviceId');
+        console.log(`Loaded device IDs - Mic: ${savedMicId}, Speaker: ${savedSpeakerId}`);
+
+        // Set selected devices, falling back to default or first available
+        const defaultMic = inputDevices.find(d => d.deviceId === 'default');
+        const defaultSpeaker = inputDevices.find(d => d.deviceId === 'default');
+        
+        const micToSet = inputDevices.some(d => d.deviceId === savedMicId) ? savedMicId 
+                       : defaultMic?.deviceId || inputDevices[0]?.deviceId || null;
+        const speakerToSet = inputDevices.some(d => d.deviceId === savedSpeakerId) ? savedSpeakerId 
+                           : defaultSpeaker?.deviceId || inputDevices[0]?.deviceId || null;
+
+        setSelectedMicrophoneDeviceId(micToSet);
+        setSelectedSpeakerDeviceId(speakerToSet);
+        console.log(`Set selected devices - Mic: ${micToSet}, Speaker: ${speakerToSet}`);
+
+        // --- Mark devices as loaded --- 
+        devicesLoadedRef.current = true; 
+        console.log("Audio devices loaded and set.");
+
+      } catch (error: any) {
+        console.error("Error fetching audio devices or settings:", error);
+        toast.error(`Failed to access audio devices: ${error.message}`);
+        setVoiceStatus('error');
+      }
+      
+      // Fetch AI settings after devices are potentially loaded
+      await fetchSettings();
+
+    };
+
+    fetchAudioDevicesAndSettings();
+  }, [fetchSettings]); // Make sure fetchSettings is stable or included if needed
 
   // --- Handler to save specific settings from Modal ---
   const handleSaveModalSettings = async (stage: string, prefs: string) => {
@@ -381,7 +349,7 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
     setAutoMode(newAutoMode);
     console.log(`Auto mode toggled: ${newAutoMode}`);
     try {
-      await window.electronAPI.saveAiSettings({ autoMode: newAutoMode });
+      await window.electronAPI.saveAISettings({ autoMode: newAutoMode });
       if (newAutoMode) {
         console.log('Auto mode ON, calling startListening()');
         startListening(); // Start hook's listening process
@@ -397,19 +365,6 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
       setAutoMode(!newAutoMode);
     }
   }, [autoMode, startListening, stopListening]);
-
-  // --- Toggle speaker role ---
-  const toggleSpeakerRole = useCallback(() => {
-    setSpeakerRole(prevRole => prevRole === 'user' ? 'interviewer' : 'user');
-  }, []);
-
-  // --- Transcript scroll effect ---
-  const transcriptContainerRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (transcriptContainerRef.current) {
-      transcriptContainerRef.current.scrollTop = transcriptContainerRef.current.scrollHeight;
-    }
-  }, [displayTranscript]); // Scroll when display transcript changes
 
   // --- NEW: Handlers for Audio Device Selection Change ---
   const handleSpeakerDeviceChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -436,6 +391,127 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
     }
   };
   // --- END: Handlers for Audio Device Selection Change ---
+
+  // ----> Setup IPC Listeners for Transcription/Errors <----
+  useEffect(() => {
+    console.log("---> VTP: Setting up IPC listeners for transcription and errors.");
+
+    const handleTranscriptionUpdate = (data: { transcript: string, isFinal: boolean }) => {
+      console.log(`---> VTP: Received speech:transcript-update:`, data);
+      setVoiceStatus('processing'); // Indicate processing when transcript comes in
+      setTranscriptEntries(prevEntries => {
+        const lastEntry = prevEntries[prevEntries.length - 1];
+        
+        // Update last interim entry (only if speaker is the same as current speakerRole)
+        if (lastEntry && lastEntry.speaker === speakerRole) {
+          // Speaker is the same as the last entry
+          if (!data.isFinal) {
+             // Interim result: Update the last entry's text (overwrite, as Google sends full interim)
+             if (!lastEntry.isFinal) {
+                 // Update existing interim entry - CREATE NEW OBJECT
+                 console.log(`---> VTP: Updating interim entry ${lastEntry.id} for ${speakerRole}`);
+                 const updatedEntry = { ...lastEntry, text: data.transcript, timestamp: Date.now() };
+                 // Replace the last element with the updated one
+                 return [...prevEntries.slice(0, -1), updatedEntry];
+             } else {
+                 // Last entry was final, but now we get an interim? Start new.
+                 console.log(`---> VTP: Adding NEW interim entry for ${speakerRole} after final`);
+                 const newEntry: TranscriptEntry = {
+                   id: Date.now().toString(),
+                   speaker: speakerRole,
+                   text: data.transcript,
+                   timestamp: Date.now(),
+                   isFinal: false,
+                 };
+                 return [...prevEntries, newEntry];
+             }
+          } else {
+             // Final result: Update the last entry if it was interim, otherwise add new final
+              if (!lastEntry.isFinal) {
+                 console.log(`---> VTP: Finalizing entry ${lastEntry.id} for ${speakerRole}`);
+                 // Update existing interim entry to final - CREATE NEW OBJECT
+                 const updatedEntry = { ...lastEntry, text: data.transcript, isFinal: true, timestamp: Date.now() };
+                 return [...prevEntries.slice(0, -1), updatedEntry];
+              } else {
+                 // Last entry was already final. Add a new final entry.
+                 // Avoid adding duplicate empty final results if they come rapidly
+                 if (!data.transcript.trim() && !lastEntry.text.trim()) {
+                    return prevEntries; // Don't add consecutive empty finals
+                 }
+                 console.log(`---> VTP: Adding NEW final entry for ${speakerRole} after previous final`);
+                 const newEntry: TranscriptEntry = {
+                   id: Date.now().toString(),
+                   speaker: speakerRole,
+                   text: data.transcript,
+                   timestamp: Date.now(),
+                   isFinal: true,
+                 };
+                 return [...prevEntries, newEntry];
+              }
+          }
+        } else {
+          // Speaker has changed, or it's the very first entry
+          console.log(`---> VTP: Adding first entry or speaker changed to ${speakerRole}`);
+          const newEntry: TranscriptEntry = {
+             id: Date.now().toString(),
+             speaker: speakerRole,
+             text: data.transcript,
+             timestamp: Date.now(),
+             isFinal: data.isFinal,
+          };
+          return [...prevEntries, newEntry];
+        }
+      });
+       // If it is the final transcript, maybe change status back to listening?
+       if (data.isFinal) {
+         setVoiceStatus('listening');
+         // Trigger suggestion generation if it was the interviewer finishing
+         if (autoMode && speakerRole === 'interviewer' && data.transcript.trim()) {
+             console.log('---> VTP: Triggering suggestion after final interviewer transcript:', data.transcript);
+             // Use a timeout to slightly delay suggestion generation, 
+             // allowing UI to potentially settle and ensuring latest state is used if needed.
+             // Also prevents potential rapid-fire calls if final events come too close.
+             setTimeout(() => {
+                generateSuggestion(data.transcript, 'interviewer');
+             }, 100); // 100ms delay
+         }
+       }
+    };
+
+    const handleStreamError = (error: { code: number, message: string }) => {
+      console.error(`---> VTP: Received speech:stream-error:`, error);
+      const errorMessage = `Speech recognition error: ${error.message} (Code: ${error.code})`;
+      toast.error(errorMessage);
+      setVoiceStatus('error'); // <-- Set status to error literal
+      // Maybe stop recording visually
+      setIsRecording(false); 
+      stopListening(); // Ensure VAD stops
+    };
+
+    let unsubscribeTranscription: (() => void) | undefined;
+    let unsubscribeError: (() => void) | undefined;
+
+    if (window.electronAPI) {
+       try {
+          unsubscribeTranscription = window.electronAPI.onTranscriptionReceived(handleTranscriptionUpdate);
+          unsubscribeError = window.electronAPI.onSpeechStreamError(handleStreamError);
+          console.log("---> VTP: Successfully subscribed to transcription and error events.");
+       } catch (err: any) {
+          const setupError = `Error setting up transcription listeners: ${err.message}`;
+          console.error("---> VTP:", setupError, err)
+          toast.error(setupError)
+          setVoiceStatus('error'); // Set status to error on setup failure
+       }
+    }
+
+    // Cleanup function
+    return () => {
+      console.log("---> VTP: Cleaning up IPC listeners for transcription and errors.");
+      unsubscribeTranscription?.();
+      unsubscribeError?.();
+    };
+  }, [stopListening, speakerRole]); // Add speakerRole as dependency
+  // ----> END Listener Setup <----
 
   return (
     <>
@@ -481,23 +557,25 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
               </label>
             </div>
 
-            {/* Speaker Role Toggle */}
+            {/* Speaker Role Indicator (replaced toggle with indicator) */}
             <div className="flex items-center ml-2">
-              <button
-                onClick={toggleSpeakerRole}
+              <div
                 className={`flex items-center text-xs px-2 py-1 rounded-full transition-colors shadow-sm ${
                   speakerRole === 'user' 
-                    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-300 border border-blue-200/50 dark:border-blue-800/50'
-                    : 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/50 dark:text-purple-300 border border-purple-200/50 dark:border-purple-800/50'
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 border border-blue-200/50 dark:border-blue-800/50'
+                    : 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300 border border-purple-200/50 dark:border-purple-800/50'
                 }`}
               >
                 <span className="mr-1">
                   {speakerRole === 'user' ? 'You' : 'Interviewer'}
                 </span>
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
-                </svg>
-              </button>
+                {isUserSpeaking && speakerRole === 'user' && (
+                  <span className="ml-1 inline-block w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-red-500/50 shadow-sm"></span>
+                )}
+                {isSpeakerSpeaking && speakerRole === 'interviewer' && (
+                  <span className="ml-1 inline-block w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-red-500/50 shadow-sm"></span>
+                )}
+              </div>
             </div>
 
             {/* --- Personality Dropdown --- */}
@@ -681,25 +759,33 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
 
           {/* Right Columns: Transcription & Assistance & RESPONSE SUGGESTION */} 
           <div className="col-span-2 space-y-3"> {/* Reduced gap slightly */} 
-            {/* Transcription Area - Use displayTranscript */}
+            {/* Transcription Area - Use transcriptEntries */}
             <div>
               <div className="flex justify-between items-center mb-2">
                  <h4 className="text-sm font-medium text-gray-200 dark:text-gray-200 border-b border-gray-700 dark:border-gray-700 pb-1">Detected Speech / Question</h4>
                  {/* Removed button */}
               </div>
-              
+
               {/* New TranscriptDisplay for YouTube-like captions */}
               {speechService === 'google' ? (
-                <TranscriptDisplay 
-                  entries={transcriptEntries}
-                  className="min-h-[60px] max-h-[200px] bg-gray-800/70 dark:bg-gray-800/70 rounded-lg border border-gray-700 dark:border-gray-700 shadow-sm p-2"
+                <TranscriptDisplay
+                  entries={transcriptEntries} // <-- Pass all entries
+                  className="min-h-[60px] max-h-[200px] bg-gray-800/70 dark:bg-gray-800/70 rounded-lg border border-gray-700 dark:border-gray-700 shadow-sm p-2 overflow-y-auto"
                 />
               ) : (
-                /* Legacy transcript display for Whisper */
-              <div ref={transcriptContainerRef} className="min-h-[60px] max-h-[200px] overflow-y-auto p-3 bg-gray-800/70 dark:bg-gray-800/70 rounded-lg border border-gray-700 dark:border-gray-700 shadow-sm">
-                  {displayTranscript ? (
+                /* Legacy transcript display for Whisper - now uses transcriptEntries */
+              <div className="min-h-[60px] max-h-[200px] overflow-y-auto p-3 bg-gray-800/70 dark:bg-gray-800/70 rounded-lg border border-gray-700 dark:border-gray-700 shadow-sm">
+                  {transcriptEntries.length > 0 ? ( // <-- Check full length
                       <div className="text-gray-200 dark:text-gray-200 whitespace-pre-line text-sm">
-                          {displayTranscript.split('\n').map((line, index) => <div key={index} className="py-0.5">{line}</div>)}
+                          {transcriptEntries
+                            .map((entry) => (
+                              // Differentiate speaker text color
+                              <div key={entry.id} className={`py-0.5 ${entry.speaker === 'user' ? 'text-blue-300' : 'text-purple-300'}`}>
+                                {/* Optionally add speaker label back if needed for clarity */} 
+                                {/* {entry.speaker === 'user' ? 'You:' : 'Interviewer:'} */}
+                                {entry.text} {entry.isFinal ? '' : '(interim)'}
+                              </div>
+                          ))}
                       </div>
                   ) : (
                       <p className="text-gray-400 dark:text-gray-400 italic text-sm">
@@ -738,9 +824,9 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
                     </div>
                   </div>
                  )}
-                 {/* Show placeholder if idle and no response */} 
+                 {/* Show placeholder if idle and no response */}
                  {!isGeneratingResponse && !suggestedResponse && (
-                   <p className="text-gray-400 dark:text-gray-400 italic text-sm">AI suggestions will appear here automatically after you stop recording (if speech was detected).</p>
+                   <p className="text-gray-400 dark:text-gray-400 italic text-sm">AI suggestions will appear here automatically after the interviewer finishes speaking.</p>
                  )}
                </div>
             </div>

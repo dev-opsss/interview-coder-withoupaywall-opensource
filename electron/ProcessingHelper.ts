@@ -12,7 +12,7 @@ import FormData from 'form-data';
 import { personalityPrompts, DEFAULT_PERSONALITY } from "./ipcHandlers"; // Import constants from ipcHandlers
 import crypto from 'crypto';
 import { setupVAD, createVADRecorder, VADOptions, VADRecorder, VADHelper } from './VADHelper';
-import { GoogleSpeechService } from '../src/services/googleSpeechService'; // Added import
+import { GoogleSpeechService } from './GoogleSpeechService'; // Import from local electron directory
 // OpenAIWhisperService import removed
 // Types directly defined here instead of importing
 type RecordType = {
@@ -1644,13 +1644,13 @@ If you include code examples, use proper markdown code blocks with language spec
         this.googleSpeechService.clearAudioBuffer();
         
         // Add audio data to Google Speech service
-        this.googleSpeechService.addAudioChunk(new Uint8Array(buffer));
+        this.googleSpeechService.sendAudioChunk(new Uint8Array(buffer));
         
         // Get transcription
         safeLog('Calling GoogleSpeechService.transcribeAudio()');
         try {
           // Pass mimeType to the transcription service
-          const transcription = await this.googleSpeechService.transcribeAudio(mimeType);
+          const transcription = await this.googleSpeechService.transcribeAudio(new Uint8Array(buffer), mimeType);
           
           if (!transcription) {
             safeError('Google Speech API returned empty transcription');
@@ -2336,7 +2336,7 @@ Format your response as a concise, professional answer appropriate for a job int
     const pcmData = this.convertFloat32ToInt16(audioData)
     
     // Add the data to the Google Speech buffer for processing
-    this.googleSpeechService.addAudioChunk(pcmData)
+    this.googleSpeechService.sendAudioChunk(pcmData)
     
     // Process for partial transcription every few chunks
     // This provides real-time feedback without overwhelming the API
@@ -2353,10 +2353,18 @@ Format your response as a concise, professional answer appropriate for a job int
 
     try {
       // Get partial transcription
-      const partialTranscript = await this.googleSpeechService.transcribePartialAudio()
+      const partialResult = await this.googleSpeechService.transcribeAudio(new Uint8Array(0));
       
-      if (partialTranscript) {
-        this.sendPartialTranscript(partialTranscript)
+      // Convert result to string based on its type
+      let partialText = "";
+      if (typeof partialResult === 'string') {
+        partialText = partialResult;
+      } else if (partialResult && typeof partialResult === 'object' && 'text' in partialResult) {
+        partialText = partialResult.text;
+      }
+      
+      if (partialText) {
+        this.sendPartialTranscript(partialText);
       }
     } catch (error) {
       console.error("Error getting partial transcription:", error)
@@ -2379,10 +2387,10 @@ Format your response as a concise, professional answer appropriate for a job int
       
       // Convert and add final audio chunk
       const pcmData = this.convertFloat32ToInt16(audioData)
-      this.googleSpeechService.addAudioChunk(pcmData)
+      this.googleSpeechService.sendAudioChunk(pcmData)
       
       // Process the full audio for final transcription
-      const transcript = await this.googleSpeechService.transcribeAudio()
+      const transcript = await this.googleSpeechService.transcribeAudio(pcmData);
       
       if (transcript) {
         console.log("Final transcript:", transcript)

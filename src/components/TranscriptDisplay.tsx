@@ -55,6 +55,14 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
+
+    // Debug logging for entries with words
+    entries.forEach((entry, idx) => {
+      if (entry.words && entry.words.length > 0) {
+        console.log(`Entry ${idx} has ${entry.words.length} words with timing:`, 
+          entry.words.slice(0, 3).map(w => `"${w.word}" (${w.startTime}s-${w.endTime}s)`));
+      }
+    });
   }, [entries]);
 
   const renderWordWithTiming = (word: Word, entryTime: number, isHighlighted: boolean) => {
@@ -66,7 +74,7 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
     };
     
     if (isHighlighted) {
-      style.backgroundColor = 'rgba(255, 255, 0, 0.3)';
+      style.backgroundColor = 'rgba(99, 102, 241, 0.4)'; // Indigo color with transparency
       style.fontWeight = 'bold';
     }
     
@@ -80,8 +88,8 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
   return (
     <div 
       ref={containerRef}
-      className={`overflow-y-auto max-h-96 p-4 border rounded ${className}`}
-      style={{ background: '#f7f7f7' }}
+      className={`overflow-y-auto max-h-96 p-4 ${className}`}
+      style={{ background: 'transparent' }}
     >
       {entries.map((entry, index) => {
         const entryStartTime = entry.timestamp;
@@ -89,14 +97,11 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
         
         return (
           <div key={index} className="mb-4">
-            <div className="font-medium mb-1">
+            <div className="font-medium mb-1 text-gray-200">
               {entry.speaker === 'user' ? 'You' : 'Interviewer'}
-              <span className="text-xs text-gray-500 ml-2">
-                {new Date(entry.timestamp).toLocaleTimeString()}
-              </span>
             </div>
             
-            <div className="text-gray-800 leading-relaxed">
+            <div className="text-gray-200 leading-relaxed">
               {entry.words ? (
                 <div>
                   {entry.words.map((word, wordIndex) => {
