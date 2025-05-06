@@ -561,7 +561,7 @@ export class ConfigHelper {
             config: {
               encoding: 'LINEAR16',
               sampleRateHertz: 16000,
-              languageCode: 'en-US',
+              languageCode: '',
               model: 'command_and_search',
             },
             audio: {

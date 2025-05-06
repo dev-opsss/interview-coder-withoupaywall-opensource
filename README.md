@@ -428,7 +428,7 @@ function App() {
       <SpeechRecognition 
         onTranscription={handleTranscription}
         onError={handleError}
-        language="en-US"
+        language=""
         maxDuration={120}
       />
     </div>

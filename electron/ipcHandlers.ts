@@ -979,4 +979,6 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   //    }
   // });
   // --- END: Core Functionality Handlers --- 
+
+  safeLog('IPC Handlers initialization complete.');
 }

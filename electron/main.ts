@@ -314,6 +314,7 @@ export interface IIpcHandlerDeps {
   moveWindowRight: () => void
   moveWindowUp: () => void
   moveWindowDown: () => void
+  googleSpeechService: GoogleSpeechService | null
 }
 
 // Initialize helpers
@@ -1310,6 +1311,7 @@ async function initializeApp() {
         ),
       moveWindowUp: () => moveWindowVertical((y) => y - state.step),
       moveWindowDown: () => moveWindowVertical((y) => y + state.step),
+      googleSpeechService: appServices.googleSpeechService
     };
 
     initializeIpcHandlers(ipcDeps); // Call the initializer with dependencies

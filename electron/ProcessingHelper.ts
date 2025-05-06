@@ -1643,8 +1643,8 @@ If you include code examples, use proper markdown code blocks with language spec
         // Clear any previous audio data
         this.googleSpeechService.clearAudioBuffer();
         
-        // Add audio data to Google Speech service
-        this.googleSpeechService.sendAudioChunk(new Uint8Array(buffer));
+        // Add audio data to Google Speech service - CONVERT to Buffer
+        this.googleSpeechService.sendAudioChunk(Buffer.from(buffer)); // <-- Remove role argument
         
         // Get transcription
         safeLog('Calling GoogleSpeechService.transcribeAudio()');
@@ -2041,7 +2041,13 @@ Format your response as a concise, professional answer appropriate for a job int
             }
           };
 
-          googleStreamStarted = this.googleSpeechService.startStreamingTranscription(handleGoogleTranscript);
+          const webContents = this.deps.getMainWindow()?.webContents;
+          if (!webContents) {
+            safeError('Cannot start Google Speech streaming: Main window webContents not available.');
+            return false;
+          }
+          // Pass webContents (now guaranteed to exist)
+          googleStreamStarted = this.googleSpeechService.startStreamingTranscription(webContents, handleGoogleTranscript);
           if (!googleStreamStarted) {
             safeError('Failed to start Google Speech streaming. Aborting start.');
             return false;
@@ -2076,7 +2082,7 @@ Format your response as a concise, professional answer appropriate for a job int
             if (speechServiceType === 'google' && this.googleSpeechService) {
                 const linear16Buffer = await this.googleSpeechService.convertFloat32ToLinear16(float32Audio, sourceSampleRate, 16000);
                 if (linear16Buffer) {
-                    this.googleSpeechService.sendAudioChunk(linear16Buffer);
+                    this.googleSpeechService.sendAudioChunk(linear16Buffer); // <-- Remove role argument
                 } else {
                     safeError('Failed to convert audio for Google Speech');
                 }
@@ -2335,8 +2341,8 @@ Format your response as a concise, professional answer appropriate for a job int
     // Convert Float32Array to Int16Array (required by Google Speech API)
     const pcmData = this.convertFloat32ToInt16(audioData)
     
-    // Add the data to the Google Speech buffer for processing
-    this.googleSpeechService.sendAudioChunk(pcmData)
+    // Add the data to the Google Speech buffer for processing - CONVERT to Buffer
+    this.googleSpeechService.sendAudioChunk(Buffer.from(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength)); // <-- Remove role argument
     
     // Process for partial transcription every few chunks
     // This provides real-time feedback without overwhelming the API
@@ -2385,9 +2391,9 @@ Format your response as a concise, professional answer appropriate for a job int
     try {
       this.isProcessingAudio = true
       
-      // Convert and add final audio chunk
+      // Convert and add final audio chunk - CONVERT to Buffer
       const pcmData = this.convertFloat32ToInt16(audioData)
-      this.googleSpeechService.sendAudioChunk(pcmData)
+      this.googleSpeechService.sendAudioChunk(Buffer.from(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength)); // <-- Remove role argument
       
       // Process the full audio for final transcription
       const transcript = await this.googleSpeechService.transcribeAudio(pcmData);

@@ -73,7 +73,7 @@ export interface ElectronAPI {
   saveSpeechService: (service: string) => Promise<boolean>
   toggleVoiceInput: () => void
   transcribeAudio: (audioData: { buffer: ArrayBuffer; type: string }) => Promise<any>
-  onTranscriptionReceived: (callback: (data: { transcript: string, isFinal: boolean }) => void) => () => void
+  onTranscriptionReceived: (callback: (data: { transcript: string, isFinal: boolean, speaker: 'user' | 'interviewer', words?: { word: string, startTime: number, endTime: number }[] }) => void) => () => void
   onTranscriptionError: (callback: (error: string) => void) => (() => void)
   onSpeechStatusChange: (callback: (status: string) => void) => (() => void)
   onSpeechStreamError: (callback: (error: { code: number, message: string }) => void) => () => void

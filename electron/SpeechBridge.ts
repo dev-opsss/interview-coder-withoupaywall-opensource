@@ -107,24 +107,27 @@ export class SpeechBridge {
       };
     });
 
-    // ----> ADD AUDIO CHUNK LISTENER <----
-    ipcMain.on('audio:chunk', (event, audioData) => {
-      // console.log(`---> [SpeechBridge] Received IPC audio:chunk, type: ${typeof audioData}, size: ${audioData?.byteLength ?? 'N/A'}`); // DEBUG
-      if (this.streamingActive && !this.isPaused && audioData instanceof ArrayBuffer) {
+    // ----> CORRECTED AUDIO DATA LISTENER (Expects Uint8Array) <----
+    ipcMain.on('speech:audio-data', (event, payload: { audio: Uint8Array, role: string }) => {
+      // console.log(`---> [SpeechBridge] Received IPC speech:audio-data, role: ${payload?.role}, size: ${payload?.audio?.byteLength ?? 'N/A'}`); // DEBUG
+      
+      // Check if audio is a Uint8Array and role exists
+      if (this.streamingActive && !this.isPaused && payload?.audio instanceof Uint8Array && payload?.role) { 
         try {
-          // Convert ArrayBuffer to Uint8Array for processAudioChunk
-          const uint8ArrayData = new Uint8Array(audioData);
-          this.processAudioChunk(uint8ArrayData);
+          // No need to convert from ArrayBuffer, it's already Uint8Array
+          this.processAudioChunk(payload.audio, payload.role); // Pass Uint8Array directly
         } catch (error) {
           this.sendError(`Error processing received audio chunk: ${error}`);
         }
       } else if (!this.streamingActive || this.isPaused) {
-        // console.log('---> [SpeechBridge] Received audio:chunk but streaming is not active or paused. Ignoring.'); // DEBUG
-      } else if (!(audioData instanceof ArrayBuffer)){
-          console.warn(`---> [SpeechBridge] Received audio:chunk but data is not an ArrayBuffer. Type: ${typeof audioData}`);
+        // console.log('---> [SpeechBridge] Received audio data while inactive/paused, ignoring.'); // DEBUG
+      } else {
+         // Log if payload format is unexpected
+         console.error(`---> [SpeechBridge] Invalid payload received for speech:audio-data. Expected { audio: Uint8Array, role: string }, Got:`, payload);
+         this.sendError('Received invalid audio data format from renderer.');
       }
     });
-    // ----> END AUDIO CHUNK LISTENER <----
+    // ----> END AUDIO DATA LISTENER <----
   }
   
   /**
@@ -220,10 +223,11 @@ export class SpeechBridge {
   }
   
   /**
-   * Send audio data to the Google Speech API
+   * Send audio data to the Google Speech API, now including the speaker role
    * @param audioData Audio data as Uint8Array
+   * @param role The speaker role ('user' | 'interviewer')
    */
-  public processAudioChunk(audioData: Uint8Array): void {
+  public processAudioChunk(audioData: Uint8Array, role: string): void {
     if (!this.speechService || !this.streamingActive || this.isPaused) {
       return;
     }
@@ -231,6 +235,7 @@ export class SpeechBridge {
     try {
       // Convert Uint8Array to Buffer before sending
       const audioBuffer = Buffer.from(audioData.buffer, audioData.byteOffset, audioData.byteLength);
+      // Pass the role to the speech service method, asserting the type
       this.speechService.sendAudioChunk(audioBuffer);
     } catch (error) {
       this.sendError(`Error processing audio: ${error}`);
@@ -319,64 +324,5 @@ export class SpeechBridge {
         language: this.language,
         hasCredentials: this.speechService !== null
       };
-  }
-}
-
-// Also export a renderer-side interface for use in the renderer process
-export class SpeechBridgeRenderer {
-  // These methods are intended to be used in the browser renderer process, 
-  // where the window.electron object is provided by the Electron preload script
-  
-  static startStreaming(language?: string): void {
-    if (typeof window !== 'undefined' && window.electron) {
-      // Use type assertion to tell TypeScript this method exists
-      (window.electron as any).send('speech:start', { language });
-    }
-  }
-  
-  static stopStreaming(): void {
-    if (typeof window !== 'undefined' && window.electron) {
-      (window.electron as any).send('speech:stop');
-    }
-  }
-  
-  static pauseStreaming(): void {
-    if (typeof window !== 'undefined' && window.electron) {
-      (window.electron as any).send('speech:pause');
-    }
-  }
-  
-  static resumeStreaming(): void {
-    if (typeof window !== 'undefined' && window.electron) {
-      (window.electron as any).send('speech:resume');
-    }
-  }
-  
-  static async getStatus(): Promise<any> {
-    if (typeof window !== 'undefined' && window.electron) {
-      return await (window.electron as any).invoke('speech:getStatus');
-    }
-    return null;
-  }
-  
-  static onTranscription(callback: (text: string, isFinal: boolean) => void): () => void {
-    if (typeof window !== 'undefined' && window.electron) {
-      return (window.electron as any).on('speech:transcription', callback);
-    }
-    return () => {};
-  }
-  
-  static onError(callback: (message: string) => void): () => void {
-    if (typeof window !== 'undefined' && window.electron) {
-      return (window.electron as any).on('speech:error', callback);
-    }
-    return () => {};
-  }
-  
-  static onStatus(callback: (status: string) => void): () => void {
-    if (typeof window !== 'undefined' && window.electron) {
-      return (window.electron as any).on('speech:status', callback);
-    }
-    return () => {};
   }
 }

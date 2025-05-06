@@ -88,44 +88,47 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
   return (
     <div 
       ref={containerRef}
-      className={`overflow-y-auto max-h-96 p-4 ${className}`}
+      className={`overflow-y-auto max-h-96 p-4 text-gray-200 leading-relaxed ${className}`}
       style={{ background: 'transparent' }}
     >
-      {entries.map((entry, index) => {
-        const entryStartTime = entry.timestamp;
-        const relativeTime = currentTime - entryStartTime;
-        
-        return (
-          <div key={index} className="mb-4">
-            <div className="font-medium mb-1 text-gray-200">
-              {entry.speaker === 'user' ? 'You' : 'Interviewer'}
-            </div>
-            
-            <div className="text-gray-200 leading-relaxed">
-              {entry.words ? (
-                <div>
-                  {entry.words.map((word, wordIndex) => {
-                    // Determine if this word should be highlighted based on timing
+      {entries.length > 0 ? (
+         entries.map((entry, index) => {
+           const entryStartTime = entry.timestamp;
+           const relativeTime = currentTime - entryStartTime;
+           
+           // Render fragment for each entry (words or text)
+           return (
+             <React.Fragment key={index}>
+               {/* Removed Speaker Label Div */}
+               
+               {entry.words ? (
+                  entry.words.map((word, wordIndex) => {
                     const isCurrentWord = 
                       relativeTime >= word.startTime && 
                       relativeTime <= word.endTime;
                       
-                    return renderWordWithTiming(word, entryStartTime, isCurrentWord);
-                  })}
-                </div>
-              ) : (
-                <div>{entry.text}</div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-      
-      {entries.length === 0 && (
-        <div className="text-gray-400 text-center py-10">
-          No transcript available yet. Speak to start recording.
-        </div>
-      )}
+                    // Add space before each word except the first in the entry
+                    return (
+                       <React.Fragment key={`${word.word}-${word.startTime}`}>
+                         {wordIndex > 0 ? ' ' : ''} 
+                         {renderWordWithTiming(word, entryStartTime, isCurrentWord)}
+                       </React.Fragment>
+                    );
+                  })
+               ) : (
+                 entry.text // Render raw text if no words
+               )}
+               {/* Add a space after each entry block for separation */}
+               {' '}
+             </React.Fragment>
+           );
+         })
+       ) : (
+         // Placeholder when no entries
+         <div className="text-gray-400 text-center py-10">
+           No transcript available yet. Speak to start recording.
+         </div>
+       )}
     </div>
   );
 }; 

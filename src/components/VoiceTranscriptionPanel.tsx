@@ -60,8 +60,7 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   const [lastError, setLastError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
 
-  // --- Speaker Detection ---
-  const [speakerRole, setSpeakerRole] = useState<'user' | 'interviewer'>('user');
+  // --- Speaker Detection (Local Role Removed) ---
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [speakerAudioInputDevices, setSpeakerAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedSpeakerDeviceId, setSelectedSpeakerDeviceId] = useState<string | null>(null);
@@ -69,7 +68,8 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   
   // --- State for transcript entries (primary transcript state) ---
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
-  const [lastSpeaker, setLastSpeaker] = useState<'user' | 'interviewer' | null>(null);
+  // --- NEW: State for backend logging control ---
+  const [isTranscriptLoggingActive, setIsTranscriptLoggingActive] = useState<boolean>(false);
 
   // --- Ref to track if devices are loaded ---
   const devicesLoadedRef = useRef<boolean>(false);
@@ -134,10 +134,9 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
 
   // --- Handlers for VAD events (passed to the hook) ---
   const handleDetectedSpeechStart = useCallback((role: 'user' | 'interviewer') => {
+    // Only update voice status, no local role tracking
     console.log(`VoiceTranscriptionPanel: Detected speech start from: ${role}`);
     setVoiceStatus('speaking');
-    setLastSpeaker(role); // Set who started speaking
-    setSpeakerRole(role); // Automatically update speaker role based on active device
   }, []);
 
   const handleDetectedSpeechEnd = useCallback(() => {
@@ -153,10 +152,12 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
     try {
       // Convert Blob to ArrayBuffer for sending over IPC
       const arrayBuffer = await audioBlob.arrayBuffer();
+      // ---> Convert to Uint8Array before sending <---
+      const uint8Array = new Uint8Array(arrayBuffer);
       
-      // Send audio data to main process via the SpeechBridge channel
-      console.log(`---> VTP: Sending audio:chunk (size: ${arrayBuffer.byteLength})`);
-      window.electronAPI?.send('speech:audio-data', arrayBuffer);
+      // Send audio data AND role to main process via the SpeechBridge channel
+      console.log(`---> VTP: Sending speech:audio-data (Uint8Array size: ${uint8Array.byteLength}, role: ${role})`);
+      window.electronAPI?.send('speech:audio-data', { audio: uint8Array, role: role }); // <-- Send Uint8Array
       // Note: We no longer expect a direct response here. Updates come via onTranscriptionReceived.
       setVoiceStatus('idle'); // Reset status after sending
 
@@ -396,65 +397,46 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   useEffect(() => {
     console.log("---> VTP: Setting up IPC listeners for transcription and errors.");
 
-    const handleTranscriptionUpdate = (data: { transcript: string, isFinal: boolean }) => {
+    const handleTranscriptionUpdate = (data: { transcript: string, isFinal: boolean, speaker: 'user' | 'interviewer', words?: { word: string, startTime: number, endTime: number }[] }) => {
       console.log(`---> VTP: Received speech:transcript-update:`, data);
-      setVoiceStatus('processing'); // Indicate processing when transcript comes in
+      setVoiceStatus('processing'); 
       setTranscriptEntries(prevEntries => {
+        console.log(`---> VTP: Updating entries. Prev count: ${prevEntries.length}. Last entry:`, prevEntries[prevEntries.length - 1]);
+        
         const lastEntry = prevEntries[prevEntries.length - 1];
         
-        // Update last interim entry (only if speaker is the same as current speakerRole)
-        if (lastEntry && lastEntry.speaker === speakerRole) {
-          // Speaker is the same as the last entry
+        // Use speaker from the DATA, not local state
+        const currentSpeaker = data.speaker;
+
+        // Logic for adding/updating entries based on incoming data speaker
+        if (lastEntry && lastEntry.speaker === currentSpeaker && !lastEntry.isFinal) {
+          // Last entry exists, is from the same speaker, and is interim
           if (!data.isFinal) {
-             // Interim result: Update the last entry's text (overwrite, as Google sends full interim)
-             if (!lastEntry.isFinal) {
-                 // Update existing interim entry - CREATE NEW OBJECT
-                 console.log(`---> VTP: Updating interim entry ${lastEntry.id} for ${speakerRole}`);
-                 const updatedEntry = { ...lastEntry, text: data.transcript, timestamp: Date.now() };
-                 // Replace the last element with the updated one
-                 return [...prevEntries.slice(0, -1), updatedEntry];
-             } else {
-                 // Last entry was final, but now we get an interim? Start new.
-                 console.log(`---> VTP: Adding NEW interim entry for ${speakerRole} after final`);
-                 const newEntry: TranscriptEntry = {
-                   id: Date.now().toString(),
-                   speaker: speakerRole,
-                   text: data.transcript,
-                   timestamp: Date.now(),
-                   isFinal: false,
-                 };
-                 return [...prevEntries, newEntry];
-             }
+             // Update existing interim entry
+             console.log(`---> VTP: Updating interim entry ${lastEntry.id} for ${currentSpeaker}`);
+             const updatedEntry = { ...lastEntry, text: data.transcript, timestamp: Date.now() };
+             return [...prevEntries.slice(0, -1), updatedEntry];
           } else {
-             // Final result: Update the last entry if it was interim, otherwise add new final
-              if (!lastEntry.isFinal) {
-                 console.log(`---> VTP: Finalizing entry ${lastEntry.id} for ${speakerRole}`);
-                 // Update existing interim entry to final - CREATE NEW OBJECT
-                 const updatedEntry = { ...lastEntry, text: data.transcript, isFinal: true, timestamp: Date.now() };
-                 return [...prevEntries.slice(0, -1), updatedEntry];
-              } else {
-                 // Last entry was already final. Add a new final entry.
-                 // Avoid adding duplicate empty final results if they come rapidly
-                 if (!data.transcript.trim() && !lastEntry.text.trim()) {
-                    return prevEntries; // Don't add consecutive empty finals
-                 }
-                 console.log(`---> VTP: Adding NEW final entry for ${speakerRole} after previous final`);
-                 const newEntry: TranscriptEntry = {
-                   id: Date.now().toString(),
-                   speaker: speakerRole,
-                   text: data.transcript,
-                   timestamp: Date.now(),
-                   isFinal: true,
-                 };
-                 return [...prevEntries, newEntry];
-              }
+             // Finalize existing interim entry
+             console.log(`---> VTP: Finalizing entry ${lastEntry.id} for ${currentSpeaker}`);
+             const updatedEntry = { ...lastEntry, text: data.transcript, isFinal: true, timestamp: Date.now() };
+             return [...prevEntries.slice(0, -1), updatedEntry];
           }
         } else {
-          // Speaker has changed, or it's the very first entry
-          console.log(`---> VTP: Adding first entry or speaker changed to ${speakerRole}`);
+          // Add a new entry because:
+          // - It's the first entry
+          // - The speaker has changed
+          // - The last entry was already final
+          
+          // Avoid adding empty final entries if the previous was also empty final
+          if (data.isFinal && !data.transcript.trim() && lastEntry?.isFinal && !lastEntry.text.trim()) {
+             return prevEntries;
+          }
+
+          console.log(`---> VTP: Adding new entry for ${currentSpeaker} (isFinal: ${data.isFinal})`);
           const newEntry: TranscriptEntry = {
-             id: Date.now().toString(),
-             speaker: speakerRole,
+             id: Date.now().toString() + Math.random(), // Add random number for better key uniqueness
+             speaker: currentSpeaker, // Use speaker from data
              text: data.transcript,
              timestamp: Date.now(),
              isFinal: data.isFinal,
@@ -462,18 +444,18 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
           return [...prevEntries, newEntry];
         }
       });
-       // If it is the final transcript, maybe change status back to listening?
+
+       // If it is the final transcript, change status back to listening
        if (data.isFinal) {
          setVoiceStatus('listening');
          // Trigger suggestion generation if it was the interviewer finishing
-         if (autoMode && speakerRole === 'interviewer' && data.transcript.trim()) {
+         // Use data.speaker here instead of local speakerRole state
+         if (autoMode && data.speaker === 'interviewer' && data.transcript.trim()) {
              console.log('---> VTP: Triggering suggestion after final interviewer transcript:', data.transcript);
-             // Use a timeout to slightly delay suggestion generation, 
-             // allowing UI to potentially settle and ensuring latest state is used if needed.
-             // Also prevents potential rapid-fire calls if final events come too close.
              setTimeout(() => {
-                generateSuggestion(data.transcript, 'interviewer');
-             }, 100); // 100ms delay
+                // Pass the actual speaker role from the data
+                generateSuggestion(data.transcript, data.speaker);
+             }, 100); 
          }
        }
     };
@@ -510,8 +492,45 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
       unsubscribeTranscription?.();
       unsubscribeError?.();
     };
-  }, [stopListening, speakerRole]); // Add speakerRole as dependency
+  }, [stopListening, autoMode, generateSuggestion]); 
   // ----> END Listener Setup <----
+
+  // --- NEW: Handlers for Backend Logging ---
+  const handleStartLogging = async () => {
+    try {
+      // Optionally prompt user for file path or use default
+      // For now, we use the default path generated by the backend
+      const result = await window.electronAPI?.invoke('transcript:start-log');
+      if (result?.success) {
+        setIsTranscriptLoggingActive(true);
+        toast.success('Transcript logging started.');
+      } else {
+        throw new Error(result?.error || 'Failed to start logging');
+      }
+    } catch (error: any) {
+      console.error('Error starting transcript logging:', error);
+      toast.error(`Could not start logging: ${error.message}`);
+      setIsTranscriptLoggingActive(false); // Ensure state is false on error
+    }
+  };
+
+  const handleStopLogging = async () => {
+    try {
+      const result = await window.electronAPI?.invoke('transcript:stop-log');
+      if (result?.success) {
+        setIsTranscriptLoggingActive(false);
+        toast.success('Transcript logging stopped.');
+      } else {
+        throw new Error(result?.error || 'Failed to stop logging');
+      }
+    } catch (error: any) {
+      console.error('Error stopping transcript logging:', error);
+      toast.error(`Could not stop logging: ${error.message}`);
+      // Keep state true? Or force false? Let's force false on error.
+      setIsTranscriptLoggingActive(false); 
+    }
+  };
+  // --- END: Handlers for Backend Logging ---
 
   return (
     <>
@@ -557,26 +576,31 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
               </label>
             </div>
 
-            {/* Speaker Role Indicator (replaced toggle with indicator) */}
-            <div className="flex items-center ml-2">
-              <div
-                className={`flex items-center text-xs px-2 py-1 rounded-full transition-colors shadow-sm ${
-                  speakerRole === 'user' 
-                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 border border-blue-200/50 dark:border-blue-800/50'
-                    : 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300 border border-purple-200/50 dark:border-purple-800/50'
-                }`}
-              >
-                <span className="mr-1">
-                  {speakerRole === 'user' ? 'You' : 'Interviewer'}
-                </span>
-                {isUserSpeaking && speakerRole === 'user' && (
-                  <span className="ml-1 inline-block w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-red-500/50 shadow-sm"></span>
-                )}
-                {isSpeakerSpeaking && speakerRole === 'interviewer' && (
-                  <span className="ml-1 inline-block w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-red-500/50 shadow-sm"></span>
-                )}
-              </div>
+            {/* --- Transcript Logging Buttons --- */}
+            <div className="flex items-center space-x-1 ml-2">
+              {!isTranscriptLoggingActive ? (
+                <button
+                  onClick={handleStartLogging}
+                  className="flex items-center justify-center px-2 py-1 h-7 rounded bg-white/30 hover:bg-white/40 text-white text-xs transition-colors shadow-sm"
+                  title="Start Backend Transcript Log"
+                >
+                  {/* Simple Log Icon */} 
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                  Start Log
+                </button>
+              ) : (
+                <button
+                  onClick={handleStopLogging}
+                  className="flex items-center justify-center px-2 py-1 h-7 rounded bg-red-500 hover:bg-red-600 text-white text-xs transition-colors shadow-sm"
+                  title="Stop Backend Transcript Log"
+                >
+                  {/* Stop Icon */} 
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="mr-1"><rect x="6" y="6" width="12" height="12" /></svg>
+                  Stop Log
+                </button>
+              )}
             </div>
+            {/* --- End Transcript Logging Buttons --- */}
 
             {/* --- Personality Dropdown --- */}
             <select
@@ -766,24 +790,25 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
                  {/* Removed button */}
               </div>
 
-              {/* New TranscriptDisplay for YouTube-like captions */}
+              {/* New TranscriptDisplay for YouTube-like captions - Keep using it, but it should render entries neutrally */}
               {speechService === 'google' ? (
                 <TranscriptDisplay
                   entries={transcriptEntries} // <-- Pass all entries
                   className="min-h-[60px] max-h-[200px] bg-gray-800/70 dark:bg-gray-800/70 rounded-lg border border-gray-700 dark:border-gray-700 shadow-sm p-2 overflow-y-auto"
                 />
               ) : (
-                /* Legacy transcript display for Whisper - now uses transcriptEntries */
+                /* Legacy transcript display for Whisper - now uses transcriptEntries - REMOVE speaker styling */
               <div className="min-h-[60px] max-h-[200px] overflow-y-auto p-3 bg-gray-800/70 dark:bg-gray-800/70 rounded-lg border border-gray-700 dark:border-gray-700 shadow-sm">
                   {transcriptEntries.length > 0 ? ( // <-- Check full length
-                      <div className="text-gray-200 dark:text-gray-200 whitespace-pre-line text-sm">
+                      <div className="text-gray-200 dark:text-gray-200 whitespace-pre-line text-sm space-y-1"> {/* Add space-y-1 for slight spacing */} 
                           {transcriptEntries
                             .map((entry) => (
-                              // Differentiate speaker text color
-                              <div key={entry.id} className={`py-0.5 ${entry.speaker === 'user' ? 'text-blue-300' : 'text-purple-300'}`}>
-                                {/* Optionally add speaker label back if needed for clarity */} 
-                                {/* {entry.speaker === 'user' ? 'You:' : 'Interviewer:'} */}
-                                {entry.text} {entry.isFinal ? '' : '(interim)'}
+                              // REMOVE speaker-based styling and labels
+                              <div key={entry.id} className="py-0.5">
+                                {entry.text} {/* Only display text */}
+                                {/* Optionally keep interim indicator if desired 
+                                {entry.isFinal ? '' : ' (interim)'} 
+                                */} 
                               </div>
                           ))}
                       </div>
