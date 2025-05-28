@@ -1,22 +1,30 @@
 import React, { useState, useEffect } from 'react';
+import { DEFAULT_PERSONALITY, availablePersonalities } from '../constants/aiConstants'; // Corrected path
 
 interface AiPersonalitySettingsModalProps {
   isOpen: boolean;
+  initialPersonality: string;
   initialInterviewStage: string;
   initialUserPreferences: string;
-  onSave: (interviewStage: string, userPreferences: string) => void;
+  onSave: (personality: string, interviewStage: string, userPreferences: string) => void;
   onClose: () => void;
 }
 
 export const AiPersonalitySettingsModal: React.FC<AiPersonalitySettingsModalProps> = ({
   isOpen,
+  initialPersonality,
   initialInterviewStage,
   initialUserPreferences,
   onSave,
   onClose,
 }) => {
+  const [personality, setPersonality] = useState(initialPersonality);
   const [interviewStage, setInterviewStage] = useState(initialInterviewStage);
   const [userPreferences, setUserPreferences] = useState(initialUserPreferences);
+
+  useEffect(() => {
+    setPersonality(initialPersonality);
+  }, [initialPersonality]);
 
   useEffect(() => {
     setInterviewStage(initialInterviewStage);
@@ -31,11 +39,11 @@ export const AiPersonalitySettingsModal: React.FC<AiPersonalitySettingsModalProp
   }
 
   const handleSave = () => {
-    onSave(interviewStage, userPreferences);
+    onSave(personality, interviewStage, userPreferences);
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 z-[900] flex items-center justify-center p-4">
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md border border-indigo-100 dark:border-gray-700 overflow-hidden flex flex-col">
         {/* Header */}
         <div className="p-3 bg-gradient-to-r from-purple-500 to-indigo-600 flex justify-between items-center flex-shrink-0">
@@ -53,6 +61,19 @@ export const AiPersonalitySettingsModal: React.FC<AiPersonalitySettingsModalProp
 
         {/* Content */}
         <div className="p-4 space-y-4 overflow-y-auto">
+          <div>
+            <label htmlFor="aiPersonality" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">AI Personality</label>
+            <select
+              id="aiPersonality"
+              value={personality}
+              onChange={(e) => setPersonality(e.target.value)}
+              className="w-full p-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              {availablePersonalities.map((p: string) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </div>
           <div>
             <label htmlFor="interviewStage" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Interview Stage</label>
             <select

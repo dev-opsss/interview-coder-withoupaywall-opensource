@@ -160,6 +160,14 @@ function App() {
   const [resumeFileName, setResumeFileName] = useState<string>('');
   // --- END: Live Assistant State ---
 
+  // --- NEW: Callback to clear live assistance display from panel ---
+  const handleClearLiveAssistanceDisplay = useCallback(() => {
+    setGeneratedInterviewAnswer('');
+    // No need to set isAssistantProcessing to false here, as this is about clearing display
+    console.log("---> App.tsx: Cleared generatedInterviewAnswer (Talking Points) via panel request.");
+  }, []);
+  // --- END: Callback to clear live assistance ---
+
   const [vad, setVad] = useState<MicVAD | null>(null); // VAD State
   const vadSpeakingRef = useRef(false); // Ref to track VAD speaking status
   const speechAudioBufferRef = useRef<Float32Array[]>([]); // Ref to store speech audio frames
@@ -905,6 +913,8 @@ Provide only the key talking points/keywords as bullet points, without any intro
               onResumeUpload={handleResumeUpload}
               onContextChange={handleContextChange}
               onClose={deactivateLiveAssistant}
+              onInterviewerTranscriptFinal={handleGenerateLiveAssistance}
+              onClearLiveAssistance={handleClearLiveAssistanceDisplay}
             />
           )}
           

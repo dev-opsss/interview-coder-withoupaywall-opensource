@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 // --- NEW: Import MicVAD and related types ---
 import { MicVAD, utils } from '@ricky0123/vad-web';
+// --- Attempt to import ort directly for wasmPaths, or check if utils exposes it ---
+// @ts-ignore - Suppress TS error about missing declaration file resolved via exports
+import ort from 'onnxruntime-web'; // Added direct import for ort
+// --- NEW: Import ipcRenderer for communication --- 
+// import { ipcRenderer } from 'electron'; // <-- REMOVE direct import
 
 // Remove old VAD imports and types
 /*
@@ -18,6 +23,7 @@ const MIN_SPEECH_DURATION = 1000; // Minimum speech duration to consider valid i
 interface UseSmartVoiceDetectionOptions {
   speakerDeviceId?: string | null;
   microphoneDeviceId?: string | null;
+  selectedLanguage?: string;
   onSpeechStart?: (speakerRole: 'user' | 'interviewer') => void;
   onSpeechEnd?: (audioBlob: Blob, speakerRole: 'user' | 'interviewer') => void;
   onSilenceAfterSpeech?: (audioBlob: Blob, speakerRole: 'user' | 'interviewer') => void;
@@ -25,6 +31,29 @@ interface UseSmartVoiceDetectionOptions {
   // vadThreshold?: number; // Removed
   autoSuggest?: boolean;
 }
+
+// --- NEW: IPC Channel Constants (match SpeechBridge) --- 
+const IPC_CHANNELS = {
+  START: 'speech:start', // Matches SpeechBridge
+  STOP: 'speech:stop',   // Matches SpeechBridge
+  AUDIO_DATA: 'speech:audio-data' // Matches GoogleSpeechService listener
+};
+
+// --- NEW: Type for stream command state ---
+type StreamCommand = 'start' | 'stop' | 'idle';
+
+// --- NEW: Configure ONNX Runtime WASM paths ---
+// This should be set before any VAD initialization that uses ONNX Runtime.
+// Using a CDN for testing; for production Electron, copy assets locally and use file paths.
+if (ort && ort.env && ort.env.wasm) {
+  ort.env.wasm.wasmPaths = 'https://unpkg.com/onnxruntime-web@latest/dist/';
+  // For @ricky0123/vad-web, the model silero_vad.onnx also needs to be accessible.
+  // MicVAD.new has options like `modelURL` and `workletURL` if those also need explicit paths.
+  console.log('Set ONNX Runtime WASM paths to CDN for testing.');
+} else {
+  console.warn('Could not set ONNX Runtime WASM paths. ort object or env.wasm not available.');
+}
+// --- END: Configure ONNX Runtime WASM paths ---
 
 /**
  * Hook to provide smart voice detection with automatic suggestion generation
@@ -34,6 +63,7 @@ interface UseSmartVoiceDetectionOptions {
 export function useSmartVoiceDetection({
   speakerDeviceId = null,
   microphoneDeviceId = null,
+  selectedLanguage = 'en-US',
   onSpeechStart,
   onSpeechEnd,
   onSilenceAfterSpeech,
@@ -45,6 +75,7 @@ export function useSmartVoiceDetection({
   const [isListening, setIsListening] = useState(false);
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [isSpeakerSpeaking, setIsSpeakerSpeaking] = useState(false);
+  const [googleStreamCommand, setGoogleStreamCommand] = useState<StreamCommand>('idle'); // <-- NEW STATE
 
   // Refs to manage audio resources for both streams
   const userStreamRef = useRef<MediaStream | null>(null);
@@ -70,10 +101,84 @@ export function useSmartVoiceDetection({
   const isSpeakerSpeakingRef = useRef(false);
   const optionsRef = useRef({ onSpeechStart, onSpeechEnd, onSilenceAfterSpeech, autoSuggest, silenceDuration });
 
+  // --- NEW: Arbitration Refs ---
+  const arbitrationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isArbitratingRef = useRef<boolean>(false);
+  const pendingSpeechStartRoleRef = useRef<'user' | 'interviewer' | null>(null);
+  // --- END: Arbitration Refs ---
+  
+  // Ref to track current audio levels to determine true speaker
+  const audioLevelsRef = useRef<{user: number, interviewer: number}>({user: 0, interviewer: 0});
+  const lastActiveSpeakerRef = useRef<'user' | 'interviewer' | null>(null);
+  
+  // Function to determine which speaker is truly active based on audio levels
+  const determineActiveSpeaker = useCallback(() => {
+    const {user, interviewer} = audioLevelsRef.current;
+    console.log(`Audio levels - User: ${user.toFixed(4)}, Interviewer: ${interviewer.toFixed(4)}`);
+    
+    // Use a ratio and absolute thresholds to determine which speaker is active
+    const ratio = Math.max(user, 0.0001) / Math.max(interviewer, 0.0001);
+    const MIN_AUDIO_LEVEL = 0.005; // Minimum level to consider as actual speech
+    const SIGNIFICANT_RATIO_USER = 10.0; // User needs to be 10x louder
+    const SIGNIFICANT_RATIO_INTERVIEWER = 0.1; // Interviewer needs to be 10x louder (1/10)
+    
+    // If neither has significant audio, keep the last active speaker
+    if (user < MIN_AUDIO_LEVEL && interviewer < MIN_AUDIO_LEVEL) {
+      console.log(`Neither input has significant audio levels, keeping last active speaker: ${lastActiveSpeakerRef.current || 'none'}`);
+      return lastActiveSpeakerRef.current || 'user';
+    }
+    
+    // If user has much louder audio
+    if (ratio > SIGNIFICANT_RATIO_USER && user > MIN_AUDIO_LEVEL) {
+      console.log(`User audio is significantly louder (ratio: ${ratio.toFixed(2)}), setting active speaker to user`);
+      return 'user';
+    } 
+    // If interviewer has much louder audio
+    else if (ratio < SIGNIFICANT_RATIO_INTERVIEWER && interviewer > MIN_AUDIO_LEVEL) {
+      console.log(`Interviewer audio is significantly louder (ratio: ${ratio.toFixed(2)}), setting active speaker to interviewer`);
+      return 'interviewer';
+    } 
+    // If levels are similar but above threshold
+    else if (user > MIN_AUDIO_LEVEL || interviewer > MIN_AUDIO_LEVEL) {
+      // Return the input with the higher absolute level
+      const speaker = user > interviewer ? 'user' : 'interviewer';
+      console.log(`Audio levels are similar, choosing ${speaker} based on higher absolute level`);
+      return speaker;
+    }
+    
+    // Default fallback - maintain last active speaker
+    console.log(`Using fallback: keeping last active speaker: ${lastActiveSpeakerRef.current || 'user'}`);
+    return lastActiveSpeakerRef.current || 'user';
+  }, []);
+
   // Update refs if callbacks/options change
   useEffect(() => {
     optionsRef.current = { onSpeechStart, onSpeechEnd, onSilenceAfterSpeech, autoSuggest, silenceDuration };
   }, [onSpeechStart, onSpeechEnd, onSilenceAfterSpeech, autoSuggest, silenceDuration]);
+
+  // --- NEW: useEffect to handle IPC stream commands ---
+  useEffect(() => {
+    if (googleStreamCommand === 'start') {
+      console.log(`---> [VAD Hook useEffect] Sending IPC ${IPC_CHANNELS.START} with language: ${selectedLanguage}`);
+      if (window.electronAPI) {
+        window.electronAPI.send(IPC_CHANNELS.START, { language: selectedLanguage });
+      } else {
+        console.warn('window.electronAPI not available when trying to send start command.');
+      }
+      // Reset command after sending
+      setGoogleStreamCommand('idle'); 
+    } else if (googleStreamCommand === 'stop') {
+      console.log(`---> [VAD Hook useEffect] Sending IPC ${IPC_CHANNELS.STOP}`);
+      if (window.electronAPI) {
+        window.electronAPI.send(IPC_CHANNELS.STOP);
+      } else {
+        console.warn('window.electronAPI not available when trying to send stop command.');
+      }
+      // Reset command after sending
+      setGoogleStreamCommand('idle');
+    }
+  }, [googleStreamCommand, selectedLanguage]);
+  // --- END: useEffect for IPC ---
 
   // Clean up resources and stop listening
   const cleanup = useCallback((streamType: 'user' | 'speaker' | 'all') => {
@@ -118,6 +223,16 @@ export function useSmartVoiceDetection({
       speechStartTimeRef.current[type] = null;
       lastSpeechEndTimeRef.current[type] = null;
       console.log(`Finished cleaning ${type} stream.`);
+
+      // --- NEW: Clear arbitration timeout on stream cleanup ---
+      if (arbitrationTimeoutRef.current) {
+        clearTimeout(arbitrationTimeoutRef.current);
+        arbitrationTimeoutRef.current = null;
+        isArbitratingRef.current = false;
+        pendingSpeechStartRoleRef.current = null;
+        console.log(`Cleared arbitration timeout during ${type} cleanup`);
+      }
+      // --- END: Clear arbitration timeout ---
     };
 
     if (streamType === 'all' || streamType === 'user') {
@@ -248,92 +363,97 @@ export function useSmartVoiceDetection({
 
 
         // --- Setup MicVAD ---
-        vadRef.current = await MicVAD.new({
+        const newVad = await MicVAD.new({
           stream: streamRef.current,
-          // Add/adjust VAD options
-          positiveSpeechThreshold: 0.5, // Try lowering threshold
-          negativeSpeechThreshold: 0.35, // Adjust accordingly
-          // minSilenceFrames: 3, // Remove incorrect option
-          // Add frame processing callback for debugging
-          onFrameProcessed: (probs, audioFrame) => {
-             if (type === 'speaker') { // Only log for speaker/interviewer stream
-                let rms = 0;
-                if (audioFrame){
-                   for (let i = 0; i < audioFrame.length; i++) {
-                      rms += audioFrame[i] * audioFrame[i];
-                   }
-                   rms = Math.sqrt(rms / audioFrame.length);
-                   // Log RMS occasionally
-                   if (Math.random() < 0.05) { 
-                      console.log(`[Interviewer Stream Debug] RMS: ${rms.toFixed(4)}, VAD Prob: ${probs?.isSpeech.toFixed(4)} (Threshold: ~0.5?)`);
-                   }
+          positiveSpeechThreshold: 0.6, // Adjust threshold as needed
+          negativeSpeechThreshold: 0.5,
+          preSpeechPadFrames: 1,
+          // Use onFrameProcessed instead of onSpeechData
+          onFrameProcessed: (probabilities: any, audioFrame?: Float32Array) => { // <-- Try onFrameProcessed
+            // Check if audioFrame is provided and we are speaking
+            // console.log(`[VAD ${role}] Frame processed. Speaking: ${speakingRef.current}`); // DEBUG - Can be very noisy
+            
+            // ---> NEW: Log probabilities
+            if (probabilities && probabilities.isSpeech !== undefined) {
+              // Log only occasionally to avoid flooding console
+              if (Math.random() < 0.05) { // Log ~5% of frames
+                 console.log(`[VAD ${role}] Speech Probability: ${probabilities.isSpeech.toFixed(4)}`);
+              }
+            }
+            // ---> END: Log probabilities
+
+            if (audioFrame && speakingRef.current) { 
+              // console.log(`[VAD ${role}] Sending audio frame, size: ${audioFrame.length}`); // DEBUG
+              // const buffer = Buffer.from(audioFrame.buffer); // <-- Error: Buffer unavailable here
+              // Use specific channel for raw audio data - send ArrayBuffer directly
+              if (window.electronAPI) {
+                window.electronAPI.send(IPC_CHANNELS.AUDIO_DATA, audioFrame.buffer);
+              } else {
+                // Add a warning if the API is not available
+                console.warn('window.electronAPI not available when trying to send audio frame data.');
+                // Optionally, stop VAD or log more details if this happens frequently
                 }
              }
           },
           onSpeechStart: () => {
-            console.log(`---> ${role} VAD: onSpeechStart callback entered.`); // Log entry
-            if (!speakingRef.current) { 
-              speakingRef.current = true;
-              speakingSetter(true);
-              speechStartTimeRef.current[type] = Date.now();
+            console.log(`---> [VAD ${role}] onSpeechStart FIRED`); // DEBUG
+            speakingSetter(true); // Use speakingSetter
+            speakingRef.current = true; // Use speakingRef
+            speechStartTimeRef.current[role] = Date.now();
+            lastSpeechEndTimeRef.current[role] = null; // Clear last end time
+            clearTimeout(silenceTimeoutRef.current[role]!);
+            silenceTimeoutRef.current[role] = null;
 
-              // Start the recorder only if inactive
-              if (recorderRef.current && recorderRef.current.state === 'inactive') {
-                 chunksRef.current = []; 
-                 try {
-                     console.log(`---> ${role} VAD: Attempting to start MediaRecorder.`); // Log recorder start attempt
-                     recorderRef.current.start();
-                     console.log(`---> ${role} MediaRecorder started successfully.`); // Log success
-                 } catch (e) { 
-                     console.error(`---> ${role} VAD: Error starting MediaRecorder:`, e); 
-                 }
-              } else {
-                 console.log(`---> ${role} VAD: MediaRecorder not started (state: ${recorderRef.current?.state})`);
-              }
+            // Determine active speaker and start stream via IPC
+            lastActiveSpeakerRef.current = role;
+            console.log(`---> [VAD ${role}] Setting googleStreamCommand to 'start'`); // DEBUG
+            setGoogleStreamCommand('start'); // <-- Trigger useEffect for IPC
+            // ipcRenderer.send(IPC_CHANNELS.START, { language: 'en-US' /* Or get lang dynamically */ }); // <-- Error: ipcRenderer unavailable here
 
-              // Clear *other* stream's silence timeout
-              const otherType = type === 'user' ? 'speaker' : 'user';
-              if (silenceTimeoutRef.current[otherType]) {
-                 clearTimeout(silenceTimeoutRef.current[otherType]!);
-                 silenceTimeoutRef.current[otherType] = null;
-                 console.log(`Cleared silence timeout for ${otherType} due to ${type} speech start.`);
-              }
-               // Clear this stream's own timeout (safety)
-               if (silenceTimeoutRef.current[type]) {
-                 clearTimeout(silenceTimeoutRef.current[type]!);
-                 silenceTimeoutRef.current[type] = null;
-              }
-
-              if (optionsRef.current.onSpeechStart) { optionsRef.current.onSpeechStart(role); }
-            } else {
-               console.log(`---> ${role} VAD: onSpeechStart called, but already speaking.`);
-            }
+            // Call the provided callback
+            optionsRef.current.onSpeechStart?.(role);
           },
-          onSpeechEnd: (audio) => {
-            console.log(`---> ${role} VAD: onSpeechEnd callback entered.`); // Log entry
-            lastSpeechEndTimeRef.current[type] = Date.now(); 
-            if (speakingRef.current) { 
-              speakingRef.current = false;
-              speakingSetter(false);
-              if (recorderRef.current && recorderRef.current.state === 'recording') {
-                 try {
-                    console.log(`---> ${role} VAD: Attempting to stop MediaRecorder.`); // Log stop attempt
-                    recorderRef.current.stop();
-                    console.log(`---> ${role} VAD: MediaRecorder stopped via onSpeechEnd.`);
-                 } catch (e) { console.error(`---> ${role} VAD: Error stopping MediaRecorder on VAD speech end:`, e); }
-              }
-            } else {
-               console.log(`---> ${role} VAD: Speech End received, but was not marked as speaking.`);
-               // If recorder is running, stop it anyway? Safety measure.
-               if (recorderRef.current && recorderRef.current.state === 'recording') {
-                  try { recorderRef.current.stop(); } catch (e) { /* ignore */ }
-               }
-            }
+          onSpeechEnd: (/* audio */) => {
+            // audio is Uint8Array containing a WAV file
+            // We no longer need to process the full blob here
+            console.log(`${role} speech end detected`);
+            const startTime = speechStartTimeRef.current[role];
+            const endTime = Date.now();
+            speechStartTimeRef.current[role] = null; // Reset start time
+            lastSpeechEndTimeRef.current[role] = endTime;
+            isUserSpeakingRef.current = false;
+            isSpeakerSpeakingRef.current = false;
+
+            // --- REMOVED: Stop the stream via IPC ---
+            // console.log(`---> [VAD ${role}] onSpeechEnd FIRED, Setting googleStreamCommand to 'stop'`); // DEBUG
+            // setGoogleStreamCommand('stop'); // <-- Trigger useEffect for IPC
+            // --- END REMOVED ---
           },
+          onVADMisfire: () => {
+            console.log(`${role} VAD misfire detected`);
+            // Can add logic here if needed, e.g., reset state
+          }
         });
 
-        vadRef.current.start();
-        console.log(`${role} MicVAD started.`);
+        vadRef.current = newVad; // Assign the correctly created VAD instance
+        // newVad.start(); // MicVAD starts automatically - Let's try explicitly starting
+        console.log(`---> [VAD ${role}] Explicitly calling start()`); // DEBUG
+        vadRef.current.start(); // <-- Explicitly start
+        console.log(`---> [VAD ${role}] Called start().`); // DEBUG
+        
+        // ---> NEW: Check stream state after start
+        if (streamRef.current && streamRef.current.getAudioTracks().length > 0) {
+          const trackState = streamRef.current.getAudioTracks()[0].readyState;
+          console.log(`---> [VAD ${role}] Audio track state after start(): ${trackState}`); // DEBUG
+          if (trackState !== 'live') {
+            console.warn(`---> [VAD ${role}] Audio track is not live after starting VAD! State: ${trackState}`);
+          }
+        } else {
+           console.warn(`---> [VAD ${role}] No audio track found after starting VAD!`);
+        }
+        // ---> END: Check stream state
+
+        console.log(`MicVAD setup complete for ${role}`);
         return true; // Indicate success
 
       } catch (error: any) {
@@ -378,6 +498,12 @@ export function useSmartVoiceDetection({
     if (!isListeningRef.current) return;
     console.log('Stopping dual stream listening (MicVAD)');
     isListeningRef.current = false; // Mark as stopping
+
+    // --- ADDED: Stop the Google stream explicitly ---
+    console.log('---> [VAD Hook] Explicitly stopping Google stream via IPC');
+    setGoogleStreamCommand('stop'); // <-- Trigger useEffect for IPC
+    // --- END ADDED ---
+
     cleanup('all');
   }, [cleanup]); // Dependency is only stable cleanup
 
@@ -394,9 +520,15 @@ export function useSmartVoiceDetection({
   useEffect(() => { 
     isListeningRef.current = isListening; 
     // Also update speaking refs when isListening changes to false (for cleanup edge cases)
-    if (!isListening) {
+    if (!isListening) { // Also clear arbitration state if listening stops externally
       isUserSpeakingRef.current = false;
       isSpeakerSpeakingRef.current = false;
+      if (arbitrationTimeoutRef.current) { 
+        clearTimeout(arbitrationTimeoutRef.current);
+        arbitrationTimeoutRef.current = null;
+      }
+      isArbitratingRef.current = false;
+      pendingSpeechStartRoleRef.current = null;
     }
   }, [isListening]);
 

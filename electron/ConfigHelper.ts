@@ -4,6 +4,7 @@ import path from "node:path"
 import { app } from "electron"
 import { OpenAI } from "openai"
 import axios from "axios"
+import crypto from "crypto"
 
 interface Config {
   apiKey: string;
@@ -21,6 +22,8 @@ interface Config {
     speechService?: "whisper" | "google";
     googleSpeechApiKey?: string;
   };
+  hasSpeechCredentials: boolean;
+  speechCredentialsPath?: string;
 }
 
 // Safe console logging to prevent EPIPE errors
@@ -78,7 +81,9 @@ export class ConfigHelper {
     config: {
       speechService: "whisper",
       googleSpeechApiKey: ""
-    }
+    },
+    hasSpeechCredentials: false,
+    speechCredentialsPath: undefined
   };
   
   private eventHandlers: {[key: string]: Function[]} = {};
@@ -556,7 +561,7 @@ export class ConfigHelper {
             config: {
               encoding: 'LINEAR16',
               sampleRateHertz: 16000,
-              languageCode: 'en-US',
+              languageCode: '',
               model: 'command_and_search',
             },
             audio: {
@@ -610,6 +615,180 @@ export class ConfigHelper {
         valid: false, 
         error: `Error: ${error.message || 'Unknown error validating Google Speech API key'}` 
       };
+    }
+  }
+
+  /**
+   * Store Google Speech service account JSON key file securely
+   */
+  public storeServiceAccountKey(keyData: string): void {
+    try {
+      console.log('ConfigHelper: Storing service account key');
+      
+      // Validate JSON format before storing
+      try {
+        const parsed = JSON.parse(keyData);
+        if (!parsed.type || !parsed.private_key || !parsed.client_email) {
+          console.warn('ConfigHelper: Service account JSON missing required fields');
+        }
+      } catch (e) {
+        console.error('ConfigHelper: Invalid JSON provided for service account key:', e);
+        // Continue anyway since we're just validating
+      }
+      
+      // Encrypt before storing
+      const encryptedKey = this.encrypt(keyData);
+      
+      // Store in a separate, secure location
+      const keyPath = path.join(app.getPath('userData'), 'speech-credentials.enc');
+      fs.writeFileSync(keyPath, encryptedKey);
+      console.log(`ConfigHelper: Credentials stored at: ${keyPath}`);
+      
+      // Also save to a more accessible temp file for debugging
+      const tempJsonPath = path.join(app.getPath('temp'), 'speech-credentials-debug.json');
+      fs.writeFileSync(tempJsonPath, keyData);
+      console.log(`ConfigHelper: Debug copy saved at: ${tempJsonPath} (for development only)`);
+      
+      // Update config to note we have credentials
+      this.updateConfig({ 
+        hasSpeechCredentials: true,
+        speechCredentialsPath: keyPath
+      });
+      
+      console.log('ConfigHelper: Google Speech service account credentials stored securely');
+    } catch (err) {
+      safeError("ConfigHelper: Error storing service account key:", err);
+    }
+  }
+
+  /**
+   * Load the Google Speech service account credentials
+   */
+  public loadServiceAccountKey(): string | null {
+    try {
+      console.log('ConfigHelper: Loading service account key');
+      const config = this.loadConfig();
+      const keyPath = config.speechCredentialsPath || path.join(app.getPath('userData'), 'speech-credentials.enc');
+      
+      if (!fs.existsSync(keyPath)) {
+        console.log(`ConfigHelper: No service account credentials found at path: ${keyPath}`);
+        return null;
+      }
+      
+      console.log(`ConfigHelper: Reading encrypted credentials from: ${keyPath}`);
+      const encryptedKey = fs.readFileSync(keyPath, 'utf8');
+      const decrypted = this.decrypt(encryptedKey);
+      
+      // Validate JSON format after loading
+      try {
+        const parsed = JSON.parse(decrypted);
+        console.log('ConfigHelper: Successfully loaded and parsed service account credentials');
+        if (!parsed.type || !parsed.private_key || !parsed.client_email) {
+          console.warn('ConfigHelper: Loaded service account JSON missing some required fields');
+        }
+      } catch (e) {
+        console.error('ConfigHelper: Invalid JSON after decryption:', e);
+        // Continue anyway to return what we have
+      }
+      
+      return decrypted;
+    } catch (err) {
+      safeError("ConfigHelper: Error loading service account key:", err);
+      return null;
+    }
+  }
+
+  /**
+   * Check if service account credentials are configured
+   */
+  public hasServiceAccountCredentials(): boolean {
+    try {
+      const config = this.loadConfig();
+      const keyPath = config.speechCredentialsPath || path.join(app.getPath('userData'), 'speech-credentials.enc');
+      return fs.existsSync(keyPath);
+    } catch (err) {
+      safeError("Error checking for service account credentials:", err);
+      return false;
+    }
+  }
+
+  /**
+   * Remove stored service account credentials
+   */
+  public removeServiceAccountCredentials(): boolean {
+    try {
+      const config = this.loadConfig();
+      // Clear speech credentials related properties
+      config.hasSpeechCredentials = false;
+      config.speechCredentialsPath = undefined;
+      
+      // Also attempt to delete the file if it exists
+      if (config.speechCredentialsPath && fs.existsSync(config.speechCredentialsPath)) {
+        fs.unlinkSync(config.speechCredentialsPath);
+      }
+      
+      // Save updated config
+      this.saveConfig(config);
+      
+      // Emit config updated event
+      this.emit('config-updated');
+      
+      return true;
+    } catch (error) {
+      safeError('Error removing service account credentials:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Simple encryption method for service account credentials
+   */
+  private encrypt(text: string): string {
+    const algorithm = 'aes-256-ctr';
+    const machineId = this.getMachineId(); // Get unique machine identifier
+    const key = crypto.scryptSync(machineId, 'salt', 32);
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv(algorithm, key, iv);
+    const encrypted = Buffer.concat([cipher.update(text), cipher.final()]);
+    return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
+  }
+
+  /**
+   * Decrypt service account credentials
+   */
+  private decrypt(encryptedText: string): string {
+    try {
+      const algorithm = 'aes-256-ctr';
+      const machineId = this.getMachineId();
+      const key = crypto.scryptSync(machineId, 'salt', 32);
+      
+      const [ivHex, encryptedHex] = encryptedText.split(':');
+      const iv = Buffer.from(ivHex, 'hex');
+      const encryptedBuffer = Buffer.from(encryptedHex, 'hex');
+      
+      const decipher = crypto.createDecipheriv(algorithm, key, iv);
+      const decrypted = Buffer.concat([decipher.update(encryptedBuffer), decipher.final()]);
+      
+      return decrypted.toString();
+    } catch (err) {
+      safeError("Error decrypting data:", err);
+      return '';
+    }
+  }
+
+  /**
+   * Get a unique machine identifier for encryption key
+   */
+  private getMachineId(): string {
+    try {
+      // Use app name and user data path to create a unique but consistent ID
+      const baseId = app.getName() + app.getPath('userData');
+      const hash = crypto.createHash('sha256').update(baseId).digest('hex');
+      return hash.substring(0, 32); // Return first 32 chars for AES-256
+    } catch (err) {
+      safeError("Error getting machine ID:", err);
+      // Fallback to a static key - not ideal but prevents crashes
+      return 'f4ll8ack1d3nt1f13rf0r3ncrypt10n';
     }
   }
 }

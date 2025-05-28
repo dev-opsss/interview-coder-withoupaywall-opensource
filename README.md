@@ -315,3 +315,189 @@ If you have questions or need support, please open an issue on the GitHub reposi
 ---
 
 > **Remember:** This is a community resource. If you find it valuable, consider contributing rather than just requesting features. The project grows through collective effort, not individual demands.
+
+# Google Speech API Integration with gRPC
+
+This project implements an efficient Google Speech API integration for the application using gRPC. It provides both streaming and non-streaming speech recognition with optimized performance.
+
+## Features
+
+- Real-time streaming transcription with Google Speech API
+- Efficient gRPC communication for low-latency results
+- Error handling with automatic retry logic
+- Rate limiting to prevent quota exhaustion
+- Support for multiple authentication methods
+- Electron IPC bridge for renderer/main process communication
+- React component for easy integration
+
+## Setup
+
+### 1. Authentication
+
+You have three options for authentication:
+
+#### Option A: API Key (simplest, but limited features)
+
+1. Get a Google Cloud API key from the Google Cloud Console
+2. Add it to your application settings or environment variables:
+   ```
+   GOOGLE_API_KEY=your_api_key
+   ```
+
+#### Option B: Service Account (recommended for production)
+
+1. Create a service account in Google Cloud Console with the "Speech-to-Text User" role:
+   - Go to Google Cloud Console → IAM & Admin → Service Accounts
+   - Click "Create Service Account"
+   - Enter a name (e.g., "speech-to-text-client") and description
+   - Click "Create and Continue"
+   - Add the "Speech-to-Text User" role (roles/speech.client)
+   - Click "Continue" and then "Done"
+
+2. Create and download credentials:
+   - Find your new service account in the list
+   - Click on the service account name to open its details
+   - Go to the "Keys" tab
+   - Click "Add Key" → "Create new key"
+   - Select "JSON" format and click "Create"
+   - The key file will be downloaded automatically
+
+3. Upload the credentials in the application:
+   - Open the application settings
+   - Go to "Speech Recognition" tab
+   - Click "Configure Service Account"
+   - Either upload the JSON file or paste its contents
+   - Your credentials will be securely encrypted and stored
+
+4. Alternatively, set the path to your credentials file as an environment variable:
+   ```
+   GOOGLE_APPLICATION_CREDENTIALS=/path/to/your-credentials.json
+   ```
+
+#### Option C: Application Default Credentials
+
+1. Install Google Cloud SDK
+2. Run `gcloud auth application-default login`
+3. The service will use your logged-in credentials
+
+### 2. Enable Google Speech API
+
+1. Go to Google Cloud Console
+2. Navigate to "APIs & Services" > "Library"
+3. Search for "Speech-to-Text API" and enable it
+4. Make sure your account has billing enabled
+
+### 3. Security Considerations
+
+The application implements several security measures for protecting your credentials:
+
+- **Encryption**: Service account JSON is encrypted before storage using AES-256-CTR
+- **Machine-specific Key**: The encryption key is derived from a unique machine identifier
+- **Isolated Storage**: Credentials are stored separately from other application data
+- **Memory Protection**: Credentials are only decrypted when needed, not kept in memory
+
+### 4. Install Dependencies
+
+The application handles dependencies automatically. When first installing or updating:
+
+```bash
+npm install
+```
+
+This will trigger the postinstall script that rebuilds native modules for Electron compatibility.
+
+## Usage
+
+### Basic Usage with React Component
+
+```jsx
+import SpeechRecognition from './components/SpeechRecognition';
+
+function App() {
+  const handleTranscription = (text, isFinal) => {
+    console.log(`Transcription (${isFinal ? 'final' : 'interim'}): ${text}`);
+  };
+
+  const handleError = (error) => {
+    console.error('Speech recognition error:', error);
+  };
+
+  return (
+    <div className="app">
+      <h1>Speech Recognition Demo</h1>
+      <SpeechRecognition 
+        onTranscription={handleTranscription}
+        onError={handleError}
+        language=""
+        maxDuration={120}
+      />
+    </div>
+  );
+}
+```
+
+### Direct API Usage
+
+```typescript
+import { appServices } from './electron/main';
+
+// Get access to the speech service
+const speechService = appServices.speechBridge.speechService;
+
+// Start streaming recognition
+speechService.startStreamingTranscription((text, isFinal) => {
+  console.log(`Transcription: ${text} (${isFinal ? 'Final' : 'Interim'})`);
+});
+
+// Send audio chunks
+speechService.sendAudioChunk(audioBuffer);
+
+// Stop streaming
+speechService.stopStreamingTranscription();
+
+// One-off transcription
+const result = await speechService.transcribeAudio(audioBuffer, 'audio/wav');
+console.log('Transcription result:', result);
+```
+
+## Advanced Configuration
+
+You can customize the speech recognition behavior by modifying the configuration in the `GoogleSpeechService` class:
+
+- Change recognition models for different scenarios (video, phone_call, etc.)
+- Adjust sample rates and encoding formats
+- Configure language detection
+- Customize retry logic and rate limiting
+
+## Troubleshooting
+
+- **Authentication Errors**: 
+  - Verify your API key or service account credentials are valid
+  - Check if your service account has the "Speech-to-Text User" role
+  - Ensure your project has billing enabled
+
+- **Quota Errors**: 
+  - You may have exceeded your Google Cloud quota
+  - Check your usage in the Google Cloud Console
+  - Consider upgrading your quota if needed
+
+- **Audio Format Issues**: 
+  - Ensure your audio is in a supported format (LINEAR16, FLAC, etc.)
+  - Check sample rate (16000Hz is recommended)
+  - Verify your audio isn't corrupted
+
+- **Network Errors**: 
+  - Check your internet connection
+  - Verify firewall settings allow outbound connections to Google APIs
+  - The application will automatically retry on temporary network issues
+
+- **Electron Integration Issues**:
+  - If you encounter native module errors, run:
+    ```bash
+    npm run rebuild-speech
+    ```
+  - This rebuilds the Speech API modules for Electron
+
+## License
+
+MIT

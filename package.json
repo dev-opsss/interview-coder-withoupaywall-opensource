@@ -18,8 +18,9 @@
     "rebuild:native": "npx @electron/rebuild -v 29.1.4 -w native-modules/macos -d",
     "rebuild:native:all": "node scripts/rebuild-native-modules.js",
     "preview": "vite preview",
-    "rebuild": "electron-rebuild -f -w node-vad,@google-cloud/speech",
-    "postinstall": "npm list tailwindcss-animate || npm install tailwindcss-animate --save-dev"
+    "rebuild": "electron-rebuild -f -w node-vad,@google-cloud/speech,@grpc/grpc-js",
+    "postinstall": "npm list tailwindcss-animate || npm install tailwindcss-animate --save-dev && electron-rebuild -f -w @google-cloud/speech,@grpc/grpc-js",
+    "rebuild-speech": "electron-rebuild -f -w @google-cloud/speech,@grpc/grpc-js"
   },
   "build": {
     "appId": "com.chunginlee.interviewcoder",
@@ -143,6 +144,8 @@
     "@emotion/styled": "^11.14.0",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@google-cloud/speech": "^7.0.1",
+    "@grpc/grpc-js": "^1.13.3",
+    "@grpc/proto-loader": "^0.7.8",
     "@mui/icons-material": "^7.0.2",
     "@mui/material": "^7.0.2",
     "@radix-ui/react-dialog": "^1.1.2",
@@ -164,11 +167,13 @@
     "lucide-react": "^0.460.0",
     "mammoth": "^1.9.0",
     "node-util": "^0.0.1",
+    "onnxruntime-web": "^1.21.1",
     "openai": "^4.28.4",
     "pdf-parse": "^1.1.1",
     "react": "^18.2.0",
     "react-code-blocks": "^0.1.6",
     "react-dom": "^18.2.0",
+    "react-hot-toast": "^2.5.2",
     "react-router-dom": "^6.28.1",
     "react-syntax-highlighter": "^15.6.1",
     "readable-stream": "^4.7.0",
@@ -193,7 +198,7 @@
     "@types/draft-js": "^0.11.18",
     "@types/electron": "^1.4.38",
     "@types/lodash": "^4.17.6",
-    "@types/node": "^20.14.9",
+    "@types/node": "^18.15.0",
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^18.2.67",
     "@types/react-dom": "^18.2.22",
@@ -228,6 +233,7 @@
     "vite": "^6.2.5",
     "vite-plugin-electron": "^0.28.4",
     "vite-plugin-electron-renderer": "^0.14.6",
+    "vite-plugin-node-polyfills": "^0.23.0",
     "wait-on": "^7.2.0"
   },
   "browserslist": {

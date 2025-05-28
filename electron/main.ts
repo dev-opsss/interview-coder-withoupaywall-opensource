@@ -53,6 +53,18 @@ import mammoth from 'mammoth';
 import { initializeStore, getStoreInstance } from './store'
 import { release } from "node:os"
 import { autoUpdater } from "electron-updater"
+import { SpeechBridge } from './SpeechBridge';
+import { AudioCapture } from './AudioCapture';
+import { GoogleSpeechService } from './GoogleSpeechService';
+
+// Create a services object to store references to our services
+export const appServices = {
+  speechBridge: null as SpeechBridge | null,
+  audioCapture: null as AudioCapture | null,
+  configHelper,
+  googleSpeechService: null as GoogleSpeechService | null,
+  processingHelper: null as ProcessingHelper | null
+};
 
 // Add a constant for dev server URL at the top of the file
 const DEV_SERVER_URL = 'http://localhost:5173';
@@ -302,6 +314,7 @@ export interface IIpcHandlerDeps {
   moveWindowRight: () => void
   moveWindowUp: () => void
   moveWindowDown: () => void
+  googleSpeechService: GoogleSpeechService | null
 }
 
 // Initialize helpers
@@ -459,9 +472,7 @@ async function createWindow(): Promise<void> {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: isDev
-        ? path.join(__dirname, "../dist-electron/preload.js")
-        : path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, 'preload.js'),
       scrollBounce: true,
       webSecurity: !isDev,
     },
@@ -666,6 +677,62 @@ async function createWindow(): Promise<void> {
     state.isWindowVisible = true;
   } catch (error) {
     safeError('Error showing window:', error);
+  }
+
+  try {
+    // Load credentials before initializing GoogleSpeechService
+    let apiKey = await configHelper.getApiKey();
+    let serviceAccountKeyContent: string | null = null; // Store the key content directly
+    try {
+      serviceAccountKeyContent = await configHelper.loadServiceAccountKey(); // Returns decrypted key string or null
+      
+      if (typeof serviceAccountKeyContent !== 'string' || serviceAccountKeyContent.trim() === '') {
+        serviceAccountKeyContent = null; // Ensure it's null if invalid or empty
+      }
+
+      if (!apiKey && !serviceAccountKeyContent) {
+        console.warn('[Main Process] No API Key or valid Service Account key content found. Google Speech service may not work.');
+        // Decide if you want to throw an error or proceed without credentials
+      }
+    } catch (error) {
+        console.error('[Main Process] Failed to load Google Cloud credentials:', error);
+        serviceAccountKeyContent = null; // Ensure it's null on error
+        // Handle error appropriately, maybe prevent service initialization
+    }
+
+    // Initialize GoogleSpeechService with loaded credentials and EXPLICIT language
+    appServices.googleSpeechService = new GoogleSpeechService(
+      serviceAccountKeyContent ?? apiKey ?? undefined,
+      'en-US' // <-- Explicitly set language code
+    );
+    console.log(`[Main Process] GoogleSpeechService initialized with API Key: ${!!apiKey}, Service Account Content: ${!!serviceAccountKeyContent}`);
+
+    // SpeechBridge depends on GoogleSpeechService and mainWindow
+    appServices.speechBridge = new SpeechBridge(appServices.googleSpeechService, state.mainWindow);
+    console.log('SpeechBridge initialized in createWindow.');
+
+    // --- IPC handlers are now managed within SpeechBridge --- 
+
+    // Use state.mainWindow for the closed event
+    if (state.mainWindow) {
+      state.mainWindow.on('closed', () => {
+        state.mainWindow = null
+        state.isWindowVisible = false
+        state.windowPosition = null
+        state.windowSize = null
+
+        // Clean up services that might hold references or resources
+        appServices.googleSpeechService?.cleanup(); // Add cleanup method if needed
+        appServices.speechBridge?.cleanup(); // Add cleanup method if needed
+
+        console.log('Main window closed and cleaned up.');
+      });
+    } else {
+       console.warn('Could not attach closed handler: mainWindow is null after creation attempt.');
+    }
+
+  } catch (error) {
+    safeError("Failed to initialize application services:", error)
   }
 }
 
@@ -1215,7 +1282,9 @@ async function initializeApp() {
     }
     
     initializeHelpers()
-    initializeIpcHandlers({
+
+    // Reconstruct the ipcDeps object
+    const ipcDeps: IIpcHandlerDeps = {
       getMainWindow,
       setWindowDimensions,
       getScreenshotQueue,
@@ -1241,8 +1310,13 @@ async function initializeApp() {
           )
         ),
       moveWindowUp: () => moveWindowVertical((y) => y - state.step),
-      moveWindowDown: () => moveWindowVertical((y) => y + state.step)
-    })
+      moveWindowDown: () => moveWindowVertical((y) => y + state.step),
+      googleSpeechService: appServices.googleSpeechService
+    };
+
+    initializeIpcHandlers(ipcDeps); // Call the initializer with dependencies
+    safeLog("IPC Handlers initialization initiated."); // Log after calling
+
     await createWindow()
 
     state.shortcutsHelper?.registerGlobalShortcuts()
@@ -1254,6 +1328,31 @@ async function initializeApp() {
       isDev ? "development" : "production",
       "mode"
     )
+
+    // Initialize GOOGLE_APPLICATION_CREDENTIALS if service account is available
+    try {
+      if (configHelper.hasServiceAccountCredentials()) {
+        console.log('Main Process: Detected service account credentials, initializing environment');
+        
+        // Ensure we have a path to the credentials file
+        const tempJsonPath = path.join(app.getPath('temp'), 'speech-credentials-main.json');
+        
+        // Write service account JSON to a file the Google client can access
+        const serviceAccountJson = configHelper.loadServiceAccountKey();
+        if (serviceAccountJson) {
+          fs.writeFileSync(tempJsonPath, serviceAccountJson);
+          
+          // Set environment variable for Google Speech API
+          process.env.GOOGLE_APPLICATION_CREDENTIALS = tempJsonPath;
+          console.log(`Main Process: Set GOOGLE_APPLICATION_CREDENTIALS to ${tempJsonPath}`);
+        } else {
+          console.log('Main Process: Could not load service account key, skipping environment setup');
+        }
+      }
+    } catch (error) {
+      console.error('Main Process: Error initializing Google credentials:', error);
+    }
+
   } catch (error) {
     safeError("Failed to initialize application:", error)
     app.quit()
@@ -1380,6 +1479,17 @@ function toggleVoiceInput(): void {
     mainWindow.webContents.send("toggle-voice-input");
   }
 }
+
+// Clean up services on app quit
+app.on('before-quit', () => {
+  if (appServices.audioCapture) {
+    appServices.audioCapture.cleanup();
+  }
+  
+  if (appServices.speechBridge) {
+    appServices.speechBridge.cleanup();
+  }
+});
 
 // Export state and functions for other modules
 export {
