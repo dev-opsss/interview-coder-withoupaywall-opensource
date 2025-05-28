@@ -62,10 +62,28 @@ export interface ElectronAPI {
   onApiKeyInvalid: (callback: () => void) => () => void
   removeListener: (eventName: string, callback: (...args: any[]) => void) => void
 
+  // Speech Recognition methods
   getGoogleSpeechApiKey: () => Promise<string | null>
-  saveGoogleSpeechApiKey: (apiKey: string) => Promise<boolean>
+  setGoogleSpeechApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  hasServiceAccountCredentials: () => Promise<boolean>
+  setServiceAccountCredentialsFromFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  setServiceAccountCredentialsFromText: (keyJsonText: string) => Promise<{ success: boolean; error?: string }>
+  clearServiceAccountCredentials: () => Promise<{ success: boolean; error?: string }>
   getSpeechService: () => Promise<string>
   saveSpeechService: (service: string) => Promise<boolean>
+  toggleVoiceInput: () => void
+  transcribeAudio: (audioData: { buffer: ArrayBuffer; type: string }) => Promise<any>
+  onTranscriptionReceived: (callback: (data: { transcript: string, isFinal: boolean, speaker: 'user' | 'interviewer', words?: { word: string, startTime: number, endTime: number }[] }) => void) => () => void
+  onTranscriptionError: (callback: (error: string) => void) => (() => void)
+  onSpeechStatusChange: (callback: (status: string) => void) => (() => void)
+  onSpeechStreamError: (callback: (error: { code: number, message: string }) => void) => () => void
+
+  // Add methods that your preload script exposes to the renderer
+  send: (channel: string, ...args: any[]) => void;
+  on: (channel: string, callback: (...args: any[]) => void) => (() => void);
+  invoke: (channel: string, ...args: any[]) => Promise<any>;
+  removeAllListeners: (channel: string) => void;
+  isElectron: boolean;
 }
 
 declare global {
@@ -84,5 +102,10 @@ declare global {
     __LANGUAGE__: string
     __IS_INITIALIZED__: boolean
     __AUTH_TOKEN__?: string | null
+    electron?: ElectronAPI
+    AudioContext: typeof AudioContext
+    webkitAudioContext?: typeof AudioContext
   }
 }
+
+export {};

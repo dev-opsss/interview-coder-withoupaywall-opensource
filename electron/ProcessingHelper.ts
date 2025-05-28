@@ -12,7 +12,7 @@ import FormData from 'form-data';
 import { personalityPrompts, DEFAULT_PERSONALITY } from "./ipcHandlers"; // Import constants from ipcHandlers
 import crypto from 'crypto';
 import { setupVAD, createVADRecorder, VADOptions, VADRecorder, VADHelper } from './VADHelper';
-import { GoogleSpeechService } from '../src/services/googleSpeechService'; // Added import
+import { GoogleSpeechService } from './GoogleSpeechService'; // Import from local electron directory
 // OpenAIWhisperService import removed
 // Types directly defined here instead of importing
 type RecordType = {
@@ -1269,7 +1269,11 @@ If you include code examples, use proper markdown code blocks with language spec
             {
               role: "user",
               parts: [
-                { text: debugPrompt },
+                { text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
+1. What issues you found in my code
+2. Specific improvements and corrections
+3. Any optimizations that would make the solution better
+4. A clear explanation of the changes needed` },
                 ...imageDataList.map(data => ({
                   inlineData: {
                     mimeType: "image/png",
@@ -1357,7 +1361,11 @@ If you include code examples, use proper markdown code blocks with language spec
               content: [
                 {
                   type: "text" as const,
-                  text: debugPrompt
+                  text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
+1. What issues you found in my code
+2. Specific improvements and corrections
+3. Any optimizations that would make the solution better
+4. A clear explanation of the changes needed`
                 },
                 ...imageDataList.map(data => ({
                   type: "image" as const,
@@ -1643,14 +1651,14 @@ If you include code examples, use proper markdown code blocks with language spec
         // Clear any previous audio data
         this.googleSpeechService.clearAudioBuffer();
         
-        // Add audio data to Google Speech service
-        this.googleSpeechService.addAudioChunk(new Uint8Array(buffer));
+        // Add audio data to Google Speech service - CONVERT to Buffer
+        this.googleSpeechService.sendAudioChunk(Buffer.from(buffer)); // <-- Remove role argument
         
         // Get transcription
         safeLog('Calling GoogleSpeechService.transcribeAudio()');
         try {
           // Pass mimeType to the transcription service
-          const transcription = await this.googleSpeechService.transcribeAudio(mimeType);
+          const transcription = await this.googleSpeechService.transcribeAudio(new Uint8Array(buffer), mimeType);
           
           if (!transcription) {
             safeError('Google Speech API returned empty transcription');
@@ -1750,47 +1758,75 @@ If you include code examples, use proper markdown code blocks with language spec
       
       // Different prompt based on who is speaking
       if (speakerRole === 'interviewer') {
-        promptTemplate = `You are an AI interview assistant helping a job candidate during an interview.
-The INTERVIEWER just asked: "${cleanedQuestion}"
+        promptTemplate = `You are an expert AI interview coach. Your goal is to help a job candidate by providing a strong, well-crafted, and complete sample response to the interviewer's latest statement/question.
 
-Based on the following context, provide the candidate with clear, concise talking points to help them respond effectively:
+The INTERVIEWER just stated or asked: "${cleanedQuestion}"
 
-Job Position: ${jobContext?.jobTitle || 'Unknown'}
-Key Skills: ${jobContext?.keySkills || 'Unknown'}
-Company Mission: ${jobContext?.companyMission || 'Unknown'}
-Personality: ${settings.personality}
-Interview Stage: ${settings.interviewStage}
-User Preferences: ${settings.userPreferences}
+Based on the candidate profile and job details below, generate a complete, professional sample response that the candidate could use. **Tailor the focus, tone, and content of this response based on the Candidate's AI Assistant Personality ('${settings.personality}') and Preferences ('${settings.userPreferences}').**
 
-${resumeTextContent ? `Resume Content:\n${resumeTextContent.substring(0, 1000)}...\n` : 'No resume provided.'}
+Your generated sample response should aim to:
+1.  Directly and clearly address the interviewer's specific point.
+2.  Strategically connect relevant experiences/skills (from resume/background) to the job requirements or company values.
+3.  Be structured logically (e.g., using STAR for behavioral questions where appropriate within the narrative).
+4.  Incorporate specific examples or achievements for impact.
+5.  Maintain an appropriate professional tone (as influenced by the Personality setting).
 
-Provide 3-4 bullet points the candidate can use to respond to this interview question. Focus on highlighting relevant skills and experiences from the resume if available.
-Format your response as bullet points starting with * and keep it concise.`;
+CANDIDATE PROFILE & JOB CONTEXT:
+- Job Position: ${jobContext?.jobTitle || 'Not specified'}
+- Key Skills Sought: ${jobContext?.keySkills || 'Not specified'}
+- Company Mission/Values: ${jobContext?.companyMission || 'Not specified'}
+- Candidate's AI Assistant Personality: ${settings.personality}
+- Interview Stage: ${settings.interviewStage}
+- Candidate's Preferences for Assistant: ${settings.userPreferences}
+- Resume Summary: ${resumeTextContent ? resumeTextContent.substring(0, 1000) + '...' : 'No resume provided.'}
+
+OUTPUT REQUIREMENTS:
+- Provide a single, coherent, fully formulated sample response.
+- The response should be ready for the candidate to adapt and use directly.
+- Do NOT use bullet points for the main response.`;
       } else {
-        // User (candidate) is speaking
-        promptTemplate = `You are an AI interview assistant helping a job candidate during an interview.
-The CANDIDATE just said: "${cleanedQuestion}"
-
-Based on the following context, provide additional talking points to strengthen their response:
-
-Job Position: ${jobContext?.jobTitle || 'Unknown'}
-Key Skills: ${jobContext?.keySkills || 'Unknown'}
-Company Mission: ${jobContext?.companyMission || 'Unknown'}
-Personality: ${settings.personality}
-Interview Stage: ${settings.interviewStage}
-User Preferences: ${settings.userPreferences}
-
-${resumeTextContent ? `Resume Content:\n${resumeTextContent.substring(0, 1000)}...\n` : 'No resume provided.'}
-
-Provide 2-3 bullet points to help expand on what was said. Focus on making the response more impressive to the interviewer.
-Format your response as bullet points starting with * and keep it concise.`;
+        // User (candidate) is speaking - AI suggestions are no longer generated for the user.
+        // Clear the prompt template to ensure no AI suggestion is generated.
+        promptTemplate = '';
       }
 
-      // For now, just return a simple implementation
-      return {
-        success: true, 
-        data: "* Example talking point 1\n* Example talking point 2\n* Example talking point 3"
-      };
+      // Only proceed if a prompt template was actually generated (i.e., if the interviewer spoke)
+      if (promptTemplate) {
+      // ---> MODIFICATION: Replace stubbed response with actual OpenAI call <---
+      if (!this.openaiClient) {
+          safeError('OpenAI client not initialized in ProcessingHelper for generateResponseSuggestion');
+          return { success: false, error: 'OpenAI client not initialized' };
+      }
+
+        const messages: { role: 'system' | 'user'; content: string }[] = [
+          { role: "system", content: "You are an AI interview assistant." },
+          { role: "user", content: promptTemplate }
+        ];
+
+      // Get the general model from config, or use a default for suggestions
+      const modelForSuggestions = (config.apiProvider === "openai" && config.solutionModel) ? config.solutionModel : "gpt-3.5-turbo";
+
+      const completion = await this.openaiClient.chat.completions.create({
+        model: modelForSuggestions, // Use the determined model
+          messages: messages,
+        max_tokens: 2000, // Adjust as needed for talking points
+        temperature: 0.5, // Lower temperature for more focused suggestions
+      });
+
+      const suggestion = completion.choices[0]?.message?.content?.trim();
+
+      if (suggestion) {
+        return { success: true, data: suggestion };
+      } else {
+        safeError("No suggestion content received from OpenAI in generateResponseSuggestion");
+        return { success: false, error: "Failed to get a valid suggestion from AI." };
+      }
+      // --- END MODIFICATION ---
+      } else {
+        safeError("No prompt template generated for generateResponseSuggestion");
+        return { success: false, error: "Failed to generate prompt template" };
+      }
+
     } catch (error) {
       safeError("Error generating response suggestion:", error);
       return { success: false, error: "Failed to generate suggestion" };
@@ -2041,7 +2077,14 @@ Format your response as a concise, professional answer appropriate for a job int
             }
           };
 
-          googleStreamStarted = this.googleSpeechService.startStreamingTranscription(handleGoogleTranscript);
+          const webContents = this.deps.getMainWindow()?.webContents;
+          if (!webContents) {
+            safeError('Cannot start Google Speech streaming: Main window webContents not available.');
+            return false;
+          }
+          // Pass webContents (now guaranteed to exist)
+          // --- MODIFIED: Pass undefined for languageCode, callback as 3rd arg ---
+          googleStreamStarted = this.googleSpeechService.startStreamingTranscription(webContents, undefined, handleGoogleTranscript);
           if (!googleStreamStarted) {
             safeError('Failed to start Google Speech streaming. Aborting start.');
             return false;
@@ -2076,7 +2119,7 @@ Format your response as a concise, professional answer appropriate for a job int
             if (speechServiceType === 'google' && this.googleSpeechService) {
                 const linear16Buffer = await this.googleSpeechService.convertFloat32ToLinear16(float32Audio, sourceSampleRate, 16000);
                 if (linear16Buffer) {
-                    this.googleSpeechService.sendAudioChunk(linear16Buffer);
+                    this.googleSpeechService.sendAudioChunk(linear16Buffer); // <-- Remove role argument
                 } else {
                     safeError('Failed to convert audio for Google Speech');
                 }
@@ -2335,8 +2378,8 @@ Format your response as a concise, professional answer appropriate for a job int
     // Convert Float32Array to Int16Array (required by Google Speech API)
     const pcmData = this.convertFloat32ToInt16(audioData)
     
-    // Add the data to the Google Speech buffer for processing
-    this.googleSpeechService.addAudioChunk(pcmData)
+    // Add the data to the Google Speech buffer for processing - CONVERT to Buffer
+    this.googleSpeechService.sendAudioChunk(Buffer.from(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength)); // <-- Remove role argument
     
     // Process for partial transcription every few chunks
     // This provides real-time feedback without overwhelming the API
@@ -2353,10 +2396,18 @@ Format your response as a concise, professional answer appropriate for a job int
 
     try {
       // Get partial transcription
-      const partialTranscript = await this.googleSpeechService.transcribePartialAudio()
+      const partialResult = await this.googleSpeechService.transcribeAudio(new Uint8Array(0));
       
-      if (partialTranscript) {
-        this.sendPartialTranscript(partialTranscript)
+      // Convert result to string based on its type
+      let partialText = "";
+      if (typeof partialResult === 'string') {
+        partialText = partialResult;
+      } else if (partialResult && typeof partialResult === 'object' && 'text' in partialResult) {
+        partialText = partialResult.text;
+      }
+      
+      if (partialText) {
+        this.sendPartialTranscript(partialText);
       }
     } catch (error) {
       console.error("Error getting partial transcription:", error)
@@ -2377,12 +2428,12 @@ Format your response as a concise, professional answer appropriate for a job int
     try {
       this.isProcessingAudio = true
       
-      // Convert and add final audio chunk
+      // Convert and add final audio chunk - CONVERT to Buffer
       const pcmData = this.convertFloat32ToInt16(audioData)
-      this.googleSpeechService.addAudioChunk(pcmData)
+      this.googleSpeechService.sendAudioChunk(Buffer.from(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength)); // <-- Remove role argument
       
       // Process the full audio for final transcription
-      const transcript = await this.googleSpeechService.transcribeAudio()
+      const transcript = await this.googleSpeechService.transcribeAudio(pcmData);
       
       if (transcript) {
         console.log("Final transcript:", transcript)

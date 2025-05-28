@@ -20,6 +20,7 @@ import {
 import * as fsPromises from 'fs/promises'; // Import fs.promises
 import pdf from 'pdf-parse'; // Import pdf-parse
 import mammoth from 'mammoth'; // Import mammoth
+import { GoogleSpeechService } from "./GoogleSpeechService"
 
 // --- Define and EXPORT AI Constants ---
 export const DEFAULT_PERSONALITY = 'Default';
@@ -60,14 +61,20 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   ipcMain.handle("get-config", () => {
     return configHelper.loadConfig();
   })
+  safeLog("Registered IPC handler: get-config");
 
   ipcMain.handle("update-config", (_event, updates) => {
     return configHelper.updateConfig(updates);
   })
+  safeLog("Registered IPC handler: update-config");
 
   ipcMain.handle("check-api-key", () => {
-    return configHelper.hasApiKey();
+    // This checks if *any* API key (OpenAI, Gemini, Anthropic, or Google Speech) is set.
+    const openAIKeyExists = !!configHelper.getApiKey(); // Checks the main apiKey field
+    const googleKeyExists = !!configHelper.getGoogleSpeechApiKey();
+    return openAIKeyExists || googleKeyExists;
   })
+  safeLog("Registered IPC handler: check-api-key");
   
   ipcMain.handle("validate-api-key", async (_event, apiKey) => {
     // First check the format
@@ -628,9 +635,27 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       safeLog(`Transcription result: ${result.success ? 'success' : 'failure'}`);
       if (!result.success) {
         safeError(`Transcription error: ${result.error}`);
+        return result;
       }
       
-      return result;
+      // Make sure the text field is directly accessible for the renderer process
+      // Create a proper serializable object for the IPC response
+      const response = {
+        success: true,
+        text: typeof result.text === 'string' ? result.text : String(result.text || ''),
+        words: Array.isArray(result.words) ? result.words.map(word => ({
+          word: word.word || '',
+          startTime: typeof word.startTime === 'number' ? word.startTime : 0,
+          endTime: typeof word.endTime === 'number' ? word.endTime : 0
+        })) : []
+      };
+
+      // Log words array size for debugging
+      if (Array.isArray(result.words)) {
+        safeLog(`Returning transcription with ${result.words.length} words with timing information`);
+      }
+      
+      return response;
     } catch (error: any) {
       safeError('Error in audio transcription:', error);
       return { 
@@ -646,225 +671,201 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
 
   // --- Add Missing Speech Service Handlers ---
   ipcMain.handle('getGoogleSpeechApiKey', async () => {
-    // Use ConfigHelper instead of store
     return configHelper.getGoogleSpeechApiKey();
-  });
+  })
+  safeLog("Registered IPC handler: getGoogleSpeechApiKey");
 
-  ipcMain.handle('saveGoogleSpeechApiKey', async (_event, apiKey: string) => {
+  ipcMain.handle('setGoogleSpeechApiKey', async (_event, apiKey: string) => {
     try {
-      // Use ConfigHelper instead of store
-      configHelper.setGoogleSpeechApiKey(apiKey);
+       await configHelper.setGoogleSpeechApiKey(apiKey);
+       // Optional: Re-initialize GoogleSpeechService if needed after key change
+       // Consider security implications - maybe require app restart?
       return { success: true };
-    } catch (error) {
-      safeError('Error saving Google Speech API key:', error);
-      return { success: false, error: 'Failed to save API key' };
+     } catch (error: any) {
+       console.error('Error setting Google Speech API Key:', error);
+       return { success: false, error: error.message };
     }
-  });
+  })
+  safeLog("Registered IPC handler: setGoogleSpeechApiKey");
 
   ipcMain.handle('getSpeechService', async () => {
-    // Use ConfigHelper instead of store
     return configHelper.getSpeechService();
-  });
+  })
+  safeLog("Registered IPC handler: getSpeechService");
 
-  ipcMain.handle('saveSpeechService', async (_event, service: 'whisper' | 'google') => {
+  // Restrict service type to only what ConfigHelper accepts
+  ipcMain.handle("setSpeechService", async (_event, service: 'whisper' | 'google') => {
     try {
-      // Use ConfigHelper instead of store
-      configHelper.setSpeechService(service);
+      await configHelper.setSpeechService(service);
+      // Optional: Trigger service re-initialization or UI update
       return { success: true };
-    } catch (error) {
-      safeError('Error saving speech service:', error);
-      return { success: false, error: 'Failed to save speech service' };
+    } catch (error: any) {
+      console.error('Error setting Speech Service:', error);
+      return { success: false, error: error.message };
     }
-  });
+  })
+  safeLog("Registered IPC handler: setSpeechService");
 
-  // Add handler for testing Google Speech API key
-  ipcMain.handle('testGoogleSpeechApiKey', async () => {
+  ipcMain.handle("set-service-account-credentials-from-file", async (_event, filePath: string) => {
     try {
-      safeLog('Testing Google Speech API key from IPC handler');
-      // Use the ConfigHelper method directly instead of ProcessingHelper
-      const result = await configHelper.testGoogleSpeechApiKey();
-      safeLog(`Google Speech API key test result: ${result.valid ? 'valid' : 'invalid'}`);
-      
-      if (!result.valid && result.error) {
-        safeError(`Google Speech API key test failed with error: ${result.error}`);
-      }
-
-      return { 
-        success: true, 
-        isValid: result.valid, 
-        message: result.valid 
-          ? 'Google Speech API key is valid.' 
-          : result.error || 'Google Speech API key is invalid or there was an error connecting to the API.'
-      };
-    } catch (error) {
-      safeError('Error testing Google Speech API key:', error);
-      return { 
-        success: false, 
-        error: 'Failed to test Google Speech API key.' 
-      };
+      // Read the file content first
+      const keyJsonText = await fsPromises.readFile(filePath, 'utf8');
+      // Use storeServiceAccountKey with the text content
+      await configHelper.storeServiceAccountKey(keyJsonText);
+      // Optionally trigger re-initialization of GoogleSpeechService
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error setting service account credentials from file:', error);
+      // Provide more specific error feedback
+      const message = error.code === 'ENOENT' ? `File not found: ${filePath}` : 
+                      error instanceof SyntaxError ? "Invalid JSON format in the service account file." : 
+                      error.message || "Failed to read or encrypt the service account file.";
+      return { success: false, error: message };
     }
   });
-  // --- End Missing Handlers --- 
+  safeLog("Registered IPC handler: set-service-account-credentials-from-file");
+  
+  ipcMain.handle("set-service-account-credentials-from-text", async (_event, keyJsonText: string) => {
+     try {
+       // Use storeServiceAccountKey directly
+       await configHelper.storeServiceAccountKey(keyJsonText);
+       // Optionally trigger re-initialization of GoogleSpeechService
+       return { success: true };
+     } catch (error: any) {
+       console.error('Error setting service account credentials from text:', error);
+        // Provide more specific error feedback
+       const message = error instanceof SyntaxError ? "Invalid JSON format provided." : 
+                       error.message || "Failed to parse or encrypt the service account JSON.";
+       return { success: false, error: message };
+     }
+  });
+  safeLog("Registered IPC handler: set-service-account-credentials-from-text");
+
+  ipcMain.handle("clear-service-account-credentials", async () => {
+    try {
+      // Use removeServiceAccountCredentials
+      const removed = await configHelper.removeServiceAccountCredentials();
+      // Optionally trigger re-initialization of GoogleSpeechService
+      return { success: removed };
+    } catch (error: any) {
+      console.error('Error clearing service account credentials:', error);
+      return { success: false, error: error.message };
+    }
+  });
+  safeLog("Registered IPC handler: clear-service-account-credentials");
+
+  ipcMain.handle("has-service-account-credentials", () => {
+     return configHelper.hasServiceAccountCredentials();
+  });
+  safeLog("Registered IPC handler: has-service-account-credentials");
 
   // --- Add AI Settings Handlers ---
   ipcMain.handle('get-ai-settings', async () => {
     try {
-      // Update to await the async function
-      const settings = await getAiSettings(); // Already returns defaults
-      return settings; 
+      return await getAiSettings(); // Use existing function from store
     } catch (error) {
-      console.error("Error getting AI settings:", error);
-      // Return defaults on error - getAiSettings handles this now
-      return await getAiSettings();
+      safeError("Error getting AI settings:", error);
+      return { // Return default structure on error
+        personality: DEFAULT_PERSONALITY,
+        interviewStage: 'Initial Screening',
+        userPreferences: '',
+        autoMode: false,
+      };
     }
   });
 
-  ipcMain.handle('save-ai-settings', async (_event, settings: Partial<any>) => {
+  ipcMain.handle('save-ai-settings', async (_event, settings: Partial<AiSettings>) => {
     try {
-      // Update to await the async function
-      await saveAiSettings(settings); // saveAiSettings now handles merging
+      await saveAiSettings(settings); // Use existing function from store
       return { success: true };
     } catch (error) {
-      console.error("Error saving AI settings:", error);
-      return { success: false, error: `Failed to save settings: ${error}` };
+      safeError("Error saving AI settings:", error);
+      return { success: false, error: 'Failed to save AI settings' };
     }
   });
   // --- End AI Settings Handlers ---
 
   // --- Add Audio Device Settings Handlers ---
-  ipcMain.handle('get-audio-device-settings', async (): Promise<AudioDeviceSettings> => {
+  ipcMain.handle('get-audio-device-settings', async () => {
     try {
-      // await waitForStoreReady(); // No longer needed here, handled by store function
-      // const settings = await storeGetAudioDeviceSettings(); // Use the specific function
-      // Use getStoreInstance directly
-      await waitForStoreReady(); // Still wait for readiness
+      await waitForStoreReady();
       const store = getStoreInstance();
-      if (!store) {
-        safeError("IPC: Store not ready for get-audio-device-settings");
-        return { speakerDeviceId: null, microphoneDeviceId: null };
-      }
-      const speakerDeviceId = store.get('audio.speakerDeviceId', null) as string | null;
-      const microphoneDeviceId = store.get('audio.microphoneDeviceId', null) as string | null;
-      safeLog(`IPC: Loaded audio device settings: Speaker=${speakerDeviceId}, Mic=${microphoneDeviceId}`);
-      return { speakerDeviceId, microphoneDeviceId };
+      return {
+        speakerDeviceId: store.get('selectedSpeakerDeviceId', null),
+        microphoneDeviceId: store.get('selectedMicrophoneDeviceId', null),
+      };
     } catch (error) {
       safeError("Error getting audio device settings:", error);
-      return { speakerDeviceId: null, microphoneDeviceId: null }; // Return defaults on error
+      return { speakerDeviceId: null, microphoneDeviceId: null };
     }
   });
 
   ipcMain.handle('save-audio-device-settings', async (_event, settings: Partial<AudioDeviceSettings>) => {
     try {
-      // await waitForStoreReady(); // No longer needed here, handled by store function
-      // await storeSaveAudioDeviceSettings(settings); // Use the specific function
-      // Use getStoreInstance directly
-      await waitForStoreReady(); // Still wait for readiness
+      await waitForStoreReady();
       const store = getStoreInstance();
-      if (!store) {
-        throw new Error("IPC: Store not initialized for saving audio device settings");
-      }
       if (settings.speakerDeviceId !== undefined) {
-        store.set('audio.speakerDeviceId', settings.speakerDeviceId);
-        safeLog(`IPC: Saved speaker device ID: ${settings.speakerDeviceId}`);
+        store.set('selectedSpeakerDeviceId', settings.speakerDeviceId);
       }
       if (settings.microphoneDeviceId !== undefined) {
-        store.set('audio.microphoneDeviceId', settings.microphoneDeviceId);
-        safeLog(`IPC: Saved microphone device ID: ${settings.microphoneDeviceId}`);
+        store.set('selectedMicrophoneDeviceId', settings.microphoneDeviceId);
       }
       return { success: true };
     } catch (error) {
       safeError("Error saving audio device settings:", error);
-      return { success: false, error: `Failed to save audio device settings: ${error}` };
+      return { success: false, error: 'Failed to save audio device settings' };
     }
   });
   // --- End Audio Device Settings Handlers ---
 
   // --- Add Resume Text Extraction Handler ---
-  ipcMain.handle('extract-resume-text', async (_, filePath: string): Promise<string | null> => {
-    safeLog(`IPC: Received resume text extraction request for path: ${filePath}`);
-    // Input validation
-    if (!filePath || typeof filePath !== 'string') {
-      safeError('IPC: Invalid file path received for resume extraction.');
+  ipcMain.handle('extract-resume-text', async (_event, filePath: string) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+      safeError('Extract Resume: File path is invalid or file does not exist.', filePath);
       return null;
     }
-    if (!fs.existsSync(filePath)) {
-      safeError(`IPC: File does not exist at path: ${filePath}`);
-      return null;
-    }
-    
     try {
-      const fileExtension = path.extname(filePath).toLowerCase();
-      let textContent = null;
-
-      if (fileExtension === '.txt') {
-        textContent = await fsPromises.readFile(filePath, 'utf-8');
-        safeLog('IPC: Parsed .txt file');
-      } else if (fileExtension === '.pdf') {
+      const ext = path.extname(filePath).toLowerCase();
+      let textContent = '';
+      if (ext === '.pdf') {
         const dataBuffer = await fsPromises.readFile(filePath);
         const data = await pdf(dataBuffer);
         textContent = data.text;
-        safeLog('IPC: Parsed .pdf file');
-      } else if (fileExtension === '.docx') {
+      } else if (ext === '.docx') {
         const result = await mammoth.extractRawText({ path: filePath });
         textContent = result.value;
-        safeLog('IPC: Parsed .docx file');
+      } else if (ext === '.txt') {
+        textContent = await fsPromises.readFile(filePath, 'utf8');
       } else {
-        safeError(`IPC: Unsupported file type: ${fileExtension}`);
-        // Return null instead of throwing to avoid exposing error details
+        safeError('Extract Resume: Unsupported file type:', ext);
         return null; 
       }
-      
-      safeLog(`IPC: Extracted text length: ${textContent?.length ?? 0}`);
+      safeLog(`Extract Resume: Successfully extracted text (length: ${textContent.length}) from ${filePath}`);
       return textContent;
     } catch (error) {
-      safeError(`IPC: Error processing resume file ${filePath}:`, error);
-      return null; // Return null to indicate failure
+      safeError(`Extract Resume: Error processing file ${filePath}:`, error);
+      return null;
     }
   });
   // --- End Resume Text Extraction Handler ---
 
   // --- Add Response Suggestion Handler ---
   ipcMain.handle('generate-response-suggestion', async (_event, payload) => {
-    safeLog('IPC: Received generate-response-suggestion request');
-    const { question, jobContext, resumeTextContent, speakerRole } = payload;
-    
-    // Basic validation
-    if (!question || typeof question !== 'string') {
-      return { success: false, error: 'Invalid question provided.' };
-    }
-    
-    // Check API key
-    if (!configHelper.hasApiKey()) {
-      safeError("Response Suggestion failed: API key missing");
-      deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
-      return { success: false, error: 'API key required' };
-    }
-    
-    // Check if processingHelper exists
     if (!deps.processingHelper) {
-      safeError('ProcessingHelper not available for response suggestion');
-      return { success: false, error: 'Internal error: Processing helper not initialized.' };
+      return { success: false, error: 'Processing helper not initialized' };
     }
-    
+    // Assuming ProcessingHelper has a method to handle this
     try {
-      // Fetch current settings from store
-      const settings = await getAiSettings(); 
-      
-      // Log who is speaking
-      safeLog(`Generating response for ${speakerRole || 'user'} speech: "${question.substring(0, 50)}..."`);
-      
-      // Call the new method in ProcessingHelper with speaker role
-      const result = await deps.processingHelper.generateResponseSuggestion(
-        question,
-        jobContext, 
-        resumeTextContent,
-        settings, // Pass the full settings object
-        speakerRole || 'user' // Default to 'user' if not provided
+      return await deps.processingHelper.generateResponseSuggestion(
+        payload.question,
+        payload.jobContext,
+        payload.resumeTextContent,
+        await getAiSettings(), // Fetch current AI settings
+        payload.speakerRole
       );
-      return result;
     } catch (error: any) {
-      safeError("Error handling response suggestion in IPC handler:", error);
-      return { success: false, error: error.message || 'An unknown error occurred generating the response suggestion.' };
+      safeError('Error generating response suggestion:', error);
+      return { success: false, error: error.message || 'Unknown error generating suggestion' };
     }
   });
   // --- End Response Suggestion Handler ---
@@ -922,4 +923,100 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       return DEFAULT_PERSONALITY;
     }
   });
+
+  // Add Google Speech API related handlers
+  ipcMain.handle('get-google-speech-api-key', async () => {
+    return configHelper.getGoogleSpeechApiKey() || '';
+  });
+
+  ipcMain.handle('save-google-speech-api-key', async (_, apiKey) => {
+    try {
+      configHelper.setGoogleSpeechApiKey(apiKey);
+      return true;
+    } catch (error: any) {
+      console.error('Error saving Google Speech API key:', error);
+      return false;
+    }
+  });
+
+  // --- ADDED: Settings Handlers --- 
+  ipcMain.handle('load-setting', async (_event, key: string) => {
+    try {
+      await waitForStoreReady();
+      const store = getStoreInstance();
+      return store.get(key);
+    } catch (error) {
+      safeError(`Error loading setting ${key}:`, error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('save-setting', async (_event, key: string, value: any) => {
+    try {
+      await waitForStoreReady();
+      const store = getStoreInstance();
+      store.set(key, value);
+      return { success: true };
+    } catch (error) {
+      safeError(`Error saving setting ${key}:`, error);
+      return { success: false, error: `Failed to save setting ${key}` };
+    }
+  });
+
+  // --- ADDED: Core Functionality Handlers ---
+  // ipcMain.handle('transcribe-audio', async (_event, payload: { buffer: ArrayBuffer, mimeType: string }) => {
+  //    if (!deps.processingHelper) {
+  //      return { success: false, error: 'Processing helper not initialized' };
+  //    }
+  //    // Assuming ProcessingHelper has a method to handle transcription
+  //    try {
+  //      // Convert ArrayBuffer back to Buffer/Uint8Array if needed by the service
+  //      const audioData = Buffer.from(payload.buffer); 
+  //      return await deps.processingHelper.handleAudioTranscription(audioData, payload.mimeType);
+  //    } catch (error: any) {
+  //       safeError('Error transcribing audio via IPC:', error);
+  //      return { success: false, error: error.message || 'Unknown transcription error' };
+  //    }
+  // });
+  // --- END: Core Functionality Handlers --- 
+
+  ipcMain.on('REQUEST_INTERVIEWER_TURN_SUGGESTION', async (event, args) => {
+    const { question, jobContext, resumeTextContent, settings } = args;
+    const mainWindow = BrowserWindow.getFocusedWindow(); // Or however you get your main window reference
+
+    if (!mainWindow) {
+      console.error('REQUEST_INTERVIEWER_TURN_SUGGESTION: mainWindow not found');
+      return;
+    }
+
+    if (!deps.processingHelper) {
+      console.error('REQUEST_INTERVIEWER_TURN_SUGGESTION: processingHelper not initialized');
+      mainWindow.webContents.send('INTERVIEWER_TURN_SUGGESTION_RESULT', {
+        success: false,
+        error: 'Processing service not available.',
+      });
+      return;
+    }
+
+    console.log('[MainIPC] Received REQUEST_INTERVIEWER_TURN_SUGGESTION for question:', question.substring(0, 50) + '...');
+
+    try {
+      const result = await deps.processingHelper.generateResponseSuggestion(
+        question,          // The last interviewer transcript
+        jobContext,
+        resumeTextContent,
+        settings,
+        'interviewer'      // <<< HARDCODE speakerRole to 'interviewer'
+      );
+      mainWindow.webContents.send('INTERVIEWER_TURN_SUGGESTION_RESULT', result);
+    } catch (error: any) {
+      console.error('[MainIPC] Error processing REQUEST_INTERVIEWER_TURN_SUGGESTION:', error);
+      mainWindow.webContents.send('INTERVIEWER_TURN_SUGGESTION_RESULT', {
+        success: false,
+        error: error.message || 'Failed to generate suggestion for interviewer turn.',
+      });
+    }
+  });
+
+  safeLog('IPC Handlers initialization complete.');
 }

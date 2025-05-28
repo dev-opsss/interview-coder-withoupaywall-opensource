@@ -13,6 +13,7 @@ import { Button } from "../ui/button";
 import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
 import { GoogleSpeechService } from '../../services/googleSpeechService';
+import { GoogleSpeechSettings } from "../../components/GoogleSpeechSettings";
 
 type APIProvider = "openai" | "gemini" | "anthropic";
 
@@ -346,7 +347,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
     try {
       setIsTestingGoogleKey(true);
       // First save the key to ensure we're testing the current input value
-      await window.electronAPI.saveGoogleSpeechApiKey(googleApiKey);
+      await window.electronAPI.setGoogleSpeechApiKey(googleApiKey);
       
       // Use invoke with the correct channel name
       const result = await window.electronAPI.invoke('testGoogleSpeechApiKey');
@@ -407,7 +408,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       }
       
       // Save settings
-      await window.electronAPI.saveGoogleSpeechApiKey(trimmedGoogleApiKey);
+      await window.electronAPI.setGoogleSpeechApiKey(trimmedGoogleApiKey);
       await window.electronAPI.saveSpeechService(speechService);
       
       showToast('Success', 'Speech settings saved', 'success');
@@ -775,90 +776,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             
             {speechService === 'google' && (
               <div>
-                <label className="text-sm font-medium text-white mb-1">
-                  Google Cloud Speech-to-Text API Key
-                </label>
-                <Input
-                  type="password"
-                  placeholder="Enter your Google Cloud API Key"
-                  className="bg-black/50 border-white/10 text-white"
-                  value={googleApiKey}
-                  onChange={(e) => setGoogleApiKey(e.target.value)}
-                  disabled={isLoading}
+                <GoogleSpeechSettings 
+                  onSettingsChanged={() => {
+                    // Refresh settings after change
+                    loadSpeechSettings();
+                    showToast("Settings updated", "Speech settings have been updated", "success");
+                  }}
                 />
-                {googleApiKey && (
-                  <p className="text-xs text-white/50 flex items-center mt-1">
-                    <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
-                      Google Speech
-                    </span>
-                    {maskApiKey(googleApiKey)}
-                  </p>
-                )}
-                
-                <div className="mt-3 p-2 rounded-md bg-white/5 border border-white/10">
-                  <p className="text-xs text-white/80 mb-1">Setting up Google Speech-to-Text:</p>
-                  <ol className="text-xs text-white/60 ml-4 space-y-1 list-decimal">
-                    <li>
-                      Create a Google Cloud account if you don't have one
-                      <button 
-                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/freetrial')}
-                        className="text-blue-400 hover:underline ml-1"
-                      >
-                        Sign Up
-                      </button>
-                    </li>
-                    <li>
-                      Create a new project in Google Cloud Console
-                      <button 
-                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/projectcreate')}
-                        className="text-blue-400 hover:underline ml-1"
-                      >
-                        Create Project
-                      </button>
-                    </li>
-                    <li>
-                      Enable the Speech-to-Text API for your project
-                      <button 
-                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/apis/library/speech.googleapis.com')}
-                        className="text-blue-400 hover:underline ml-1"
-                      >
-                        Enable API
-                      </button>
-                    </li>
-                    <li>
-                      Create an API key and paste it here
-                      <button 
-                        onClick={() => window.electronAPI.openLink('https://console.cloud.google.com/apis/credentials')}
-                        className="text-blue-400 hover:underline ml-1"
-                      >
-                        Create Key
-                      </button>
-                    </li>
-                  </ol>
-                  <p className="text-xs text-white/60 mt-2">
-                    <span className="text-yellow-400">Important:</span> Google Cloud offers a free tier with $300 credit for new accounts. Standard Speech-to-Text usage is 
-                    <a 
-                      href="https://cloud.google.com/speech-to-text/pricing" 
-                      className="text-blue-400 hover:underline mx-1"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        window.electronAPI.openLink('https://cloud.google.com/speech-to-text/pricing');
-                      }}
-                    >
-                      $0.006 per 15 seconds
-                    </a>
-                    of audio.
-                  </p>
-                </div>
-                
-                <div className="flex justify-end items-center mt-2">
-                  <button
-                    onClick={() => window.electronAPI.openLink('https://cloud.google.com/speech-to-text/docs/quickstart')}
-                    className="text-blue-400 hover:underline text-xs"
-                  >
-                    View Documentation
-                  </button>
-                </div>
               </div>
             )}
           </div>

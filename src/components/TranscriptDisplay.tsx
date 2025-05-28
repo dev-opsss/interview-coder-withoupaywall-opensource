@@ -55,6 +55,14 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
+
+    // Debug logging for entries with words
+    entries.forEach((entry, idx) => {
+      if (entry.words && entry.words.length > 0) {
+        console.log(`Entry ${idx} has ${entry.words.length} words with timing:`, 
+          entry.words.slice(0, 3).map(w => `"${w.word}" (${w.startTime}s-${w.endTime}s)`));
+      }
+    });
   }, [entries]);
 
   const renderWordWithTiming = (word: Word, entryTime: number, isHighlighted: boolean) => {
@@ -66,7 +74,7 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
     };
     
     if (isHighlighted) {
-      style.backgroundColor = 'rgba(255, 255, 0, 0.3)';
+      style.backgroundColor = 'rgba(99, 102, 241, 0.4)'; // Indigo color with transparency
       style.fontWeight = 'bold';
     }
     
@@ -80,47 +88,47 @@ export const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({
   return (
     <div 
       ref={containerRef}
-      className={`overflow-y-auto max-h-96 p-4 border rounded ${className}`}
-      style={{ background: '#f7f7f7' }}
+      className={`overflow-y-auto max-h-96 p-4 text-gray-200 leading-relaxed ${className}`}
+      style={{ background: 'transparent' }}
     >
-      {entries.map((entry, index) => {
-        const entryStartTime = entry.timestamp;
-        const relativeTime = currentTime - entryStartTime;
-        
-        return (
-          <div key={index} className="mb-4">
-            <div className="font-medium mb-1">
-              {entry.speaker === 'user' ? 'You' : 'Interviewer'}
-              <span className="text-xs text-gray-500 ml-2">
-                {new Date(entry.timestamp).toLocaleTimeString()}
-              </span>
-            </div>
-            
-            <div className="text-gray-800 leading-relaxed">
-              {entry.words ? (
-                <div>
-                  {entry.words.map((word, wordIndex) => {
-                    // Determine if this word should be highlighted based on timing
+      {entries.length > 0 ? (
+         entries.map((entry, index) => {
+           const entryStartTime = entry.timestamp;
+           const relativeTime = currentTime - entryStartTime;
+           
+           // Render fragment for each entry (words or text)
+           return (
+             <React.Fragment key={index}>
+               {/* Removed Speaker Label Div */}
+               
+               {entry.words ? (
+                  entry.words.map((word, wordIndex) => {
                     const isCurrentWord = 
                       relativeTime >= word.startTime && 
                       relativeTime <= word.endTime;
                       
-                    return renderWordWithTiming(word, entryStartTime, isCurrentWord);
-                  })}
-                </div>
-              ) : (
-                <div>{entry.text}</div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-      
-      {entries.length === 0 && (
-        <div className="text-gray-400 text-center py-10">
-          No transcript available yet. Speak to start recording.
-        </div>
-      )}
+                    // Add space before each word except the first in the entry
+                    return (
+                       <React.Fragment key={`${word.word}-${word.startTime}`}>
+                         {wordIndex > 0 ? ' ' : ''} 
+                         {renderWordWithTiming(word, entryStartTime, isCurrentWord)}
+                       </React.Fragment>
+                    );
+                  })
+               ) : (
+                 entry.text // Render raw text if no words
+               )}
+               {/* Add a space after each entry block for separation */}
+               {' '}
+             </React.Fragment>
+           );
+         })
+       ) : (
+         // Placeholder when no entries
+         <div className="text-gray-400 text-center py-10">
+           No transcript available yet. Speak to start recording.
+         </div>
+       )}
     </div>
   );
 }; 
