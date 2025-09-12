@@ -229,24 +229,45 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       // Load main API config
       window.electronAPI
         .getConfig()
-        .then((config: Config) => {
+        .then(async (config: Config) => {
           const currentProvider = config.apiProvider || "openai";
           const currentKey = config.apiKey || "";
           
           // Set provider
           setApiProvider(currentProvider);
           
-          // Store the key in the appropriate state variable based on provider
-          if (currentProvider === "openai") {
-            setOpenaiApiKey(currentKey);
-          } else if (currentProvider === "gemini") {
-            setGeminiApiKey(currentKey);
-          } else if (currentProvider === "anthropic") {
-            setAnthropicApiKey(currentKey);
+          // Load provider-specific API keys
+          try {
+            const [openaiKey, geminiKey, anthropicKey] = await Promise.all([
+              window.electronAPI.getOpenAIApiKey(),
+              window.electronAPI.getGeminiApiKey(),
+              window.electronAPI.getAnthropicApiKey()
+            ]);
+            
+            setOpenaiApiKey(openaiKey || "");
+            setGeminiApiKey(geminiKey || "");
+            setAnthropicApiKey(anthropicKey || "");
+            
+            // Set current API key based on provider
+            if (currentProvider === "openai") {
+              setApiKey(openaiKey || currentKey);
+            } else if (currentProvider === "gemini") {
+              setApiKey(geminiKey || currentKey);
+            } else if (currentProvider === "anthropic") {
+              setApiKey(anthropicKey || currentKey);
+            }
+          } catch (error) {
+            console.error("Failed to load provider-specific API keys:", error);
+            // Fallback to the old method
+            setApiKey(currentKey);
+            if (currentProvider === "openai") {
+              setOpenaiApiKey(currentKey);
+            } else if (currentProvider === "gemini") {
+              setGeminiApiKey(currentKey);
+            } else if (currentProvider === "anthropic") {
+              setAnthropicApiKey(currentKey);
+            }
           }
-          
-          // Set current API key
-          setApiKey(currentKey);
           
           // Set models
           setExtractionModel(config.extractionModel || "gpt-4o");
@@ -309,6 +330,10 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       const result = await window.electronAPI.updateConfig({
         apiKey,
         apiProvider,
+        // Save all provider-specific API keys
+        openaiApiKey,
+        geminiApiKey,
+        anthropicApiKey,
         extractionModel,
         solutionModel,
         debuggingModel,
@@ -349,8 +374,8 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       // First save the key to ensure we're testing the current input value
       await window.electronAPI.setGoogleSpeechApiKey(googleApiKey);
       
-      // Use invoke with the correct channel name
-      const result = await window.electronAPI.invoke('testGoogleSpeechApiKey');
+      // Use the proper method
+      const result = await window.electronAPI.testGoogleSpeechApiKey();
       
       if (result && result.valid) {
         showToast("Success", "Google Speech API key is valid", "success");
@@ -409,7 +434,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       
       // Save settings
       await window.electronAPI.setGoogleSpeechApiKey(trimmedGoogleApiKey);
-      await window.electronAPI.saveSpeechService(speechService);
+      await window.electronAPI.setSpeechService(speechService);
       
       showToast('Success', 'Speech settings saved', 'success');
       

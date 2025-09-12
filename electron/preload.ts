@@ -177,6 +177,10 @@ const electronAPI = {
   getConfig: () => ipcRenderer.invoke("get-config"),
   updateConfig: (config: { apiKey?: string; model?: string; language?: string; opacity?: number }) => 
     ipcRenderer.invoke("update-config", config),
+  // Provider-specific API key methods
+  getOpenAIApiKey: () => ipcRenderer.invoke("get-openai-api-key"),
+  getGeminiApiKey: () => ipcRenderer.invoke("get-gemini-api-key"),
+  getAnthropicApiKey: () => ipcRenderer.invoke("get-anthropic-api-key"),
   loadSetting: (key: string) => ipcRenderer.invoke('load-setting', key),
   saveSetting: (key: string, value: any) => ipcRenderer.invoke('save-setting', key, value),
   getAISettings: () => ipcRenderer.invoke('get-ai-settings'),
@@ -200,7 +204,6 @@ const electronAPI = {
     ipcRenderer.send("dialog-cancel", sessionId),
   handleAiQuery: (args: { query: string; language: string }) => 
     ipcRenderer.invoke('handle-ai-query', args),
-  getOpenAIApiKey: () => ipcRenderer.invoke('getOpenAIApiKey'), // Assuming exists
   getGoogleSpeechApiKey: () => ipcRenderer.invoke('getGoogleSpeechApiKey'),
   setGoogleSpeechApiKey: (apiKey: string) => ipcRenderer.invoke('setGoogleSpeechApiKey', apiKey),
   getSpeechService: () => ipcRenderer.invoke('getSpeechService'),

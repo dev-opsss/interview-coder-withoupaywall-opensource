@@ -68,6 +68,22 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   })
   safeLog("Registered IPC handler: update-config");
 
+  // Provider-specific API key handlers
+  ipcMain.handle("get-openai-api-key", () => {
+    return configHelper.getOpenAIApiKey();
+  })
+  safeLog("Registered IPC handler: get-openai-api-key");
+
+  ipcMain.handle("get-gemini-api-key", () => {
+    return configHelper.getGeminiApiKey();
+  })
+  safeLog("Registered IPC handler: get-gemini-api-key");
+
+  ipcMain.handle("get-anthropic-api-key", () => {
+    return configHelper.getAnthropicApiKey();
+  })
+  safeLog("Registered IPC handler: get-anthropic-api-key");
+
   ipcMain.handle("check-api-key", () => {
     // This checks if *any* API key (OpenAI, Gemini, Anthropic, or Google Speech) is set.
     const openAIKeyExists = !!configHelper.getApiKey(); // Checks the main apiKey field
@@ -705,6 +721,17 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     }
   })
   safeLog("Registered IPC handler: setSpeechService");
+
+  ipcMain.handle('testGoogleSpeechApiKey', async () => {
+    try {
+      const result = await configHelper.testGoogleSpeechApiKey();
+      return result;
+    } catch (error: any) {
+      console.error('Error testing Google Speech API key:', error);
+      return { valid: false, error: error.message || 'Unknown error occurred' };
+    }
+  })
+  safeLog("Registered IPC handler: testGoogleSpeechApiKey");
 
   ipcMain.handle("set-service-account-credentials-from-file", async (_event, filePath: string) => {
     try {

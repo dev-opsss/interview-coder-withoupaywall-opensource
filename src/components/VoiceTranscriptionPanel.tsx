@@ -517,6 +517,12 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
        // If it is the final transcript, change status back to listening
        if (data.isFinal) {
          setVoiceStatus('listening');
+         
+         // Trigger AI assistance if this is an interviewer's final transcript
+         if (data.speaker === 'interviewer' && data.transcript.trim() && onInterviewerTranscriptFinal) {
+           console.log(`---> VTP: Triggering AI assistance for interviewer transcript: "${data.transcript}"`);
+           onInterviewerTranscriptFinal(data.transcript);
+         }
        }
     };
 

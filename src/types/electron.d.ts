@@ -56,6 +56,10 @@ export interface ElectronAPI {
   // New methods for OpenAI integration
   getConfig: () => Promise<{ apiKey: string; model: string }>
   updateConfig: (config: { apiKey?: string; model?: string }) => Promise<boolean>
+  // Provider-specific API key methods
+  getOpenAIApiKey: () => Promise<string>
+  getGeminiApiKey: () => Promise<string>
+  getAnthropicApiKey: () => Promise<string>
   checkApiKey: () => Promise<boolean>
   validateApiKey: (apiKey: string) => Promise<{ valid: boolean; error?: string }>
   openLink: (url: string) => void
@@ -65,12 +69,13 @@ export interface ElectronAPI {
   // Speech Recognition methods
   getGoogleSpeechApiKey: () => Promise<string | null>
   setGoogleSpeechApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  testGoogleSpeechApiKey: () => Promise<{ valid: boolean; error?: string }>
   hasServiceAccountCredentials: () => Promise<boolean>
   setServiceAccountCredentialsFromFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
   setServiceAccountCredentialsFromText: (keyJsonText: string) => Promise<{ success: boolean; error?: string }>
   clearServiceAccountCredentials: () => Promise<{ success: boolean; error?: string }>
   getSpeechService: () => Promise<string>
-  saveSpeechService: (service: string) => Promise<boolean>
+  setSpeechService: (service: string) => Promise<boolean>
   toggleVoiceInput: () => void
   transcribeAudio: (audioData: { buffer: ArrayBuffer; type: string }) => Promise<any>
   onTranscriptionReceived: (callback: (data: { transcript: string, isFinal: boolean, speaker: 'user' | 'interviewer', words?: { word: string, startTime: number, endTime: number }[] }) => void) => () => void

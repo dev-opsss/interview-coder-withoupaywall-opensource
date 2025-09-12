@@ -98,13 +98,17 @@ export class ScreenshotHelper {
         throw new Error("Could not find main screen source")
       }
 
-      // Get the thumbnail NativeImage
+      // Get the thumbnail NativeImage and resize for better performance
       const thumbnail = mainSource.thumbnail
+      
+      // Resize to reduce file size while maintaining readability
+      // Max width of 1200px should be sufficient for most coding problems
+      const resizedThumbnail = thumbnail.resize({ width: 1200 })
       
       // Save the screenshot based on current view
       if (this.view === "queue") {
         screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
-        fs.writeFileSync(screenshotPath, thumbnail.toPNG())
+        fs.writeFileSync(screenshotPath, resizedThumbnail.toPNG())
         console.log("Adding screenshot to main queue:", screenshotPath)
         this.screenshotQueue.push(screenshotPath)
         if (this.screenshotQueue.length > this.MAX_SCREENSHOTS) {
@@ -124,7 +128,7 @@ export class ScreenshotHelper {
       } else {
         // In solutions view, only add to extra queue
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
-        fs.writeFileSync(screenshotPath, thumbnail.toPNG())
+        fs.writeFileSync(screenshotPath, resizedThumbnail.toPNG())
         console.log("Adding screenshot to extra queue:", screenshotPath)
         this.extraScreenshotQueue.push(screenshotPath)
         if (this.extraScreenshotQueue.length > this.MAX_SCREENSHOTS) {

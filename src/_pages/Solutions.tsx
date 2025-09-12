@@ -328,19 +328,22 @@ const Solutions: React.FC<SolutionsProps> = ({
           console.warn("Received empty or invalid solution data")
           return
         }
-        console.log({ data })
-        const solutionData = {
-          code: data.code,
-          thoughts: data.thoughts,
-          time_complexity: data.time_complexity,
-          space_complexity: data.space_complexity
-        }
+        
+        // Use setTimeout to ensure proper React state updates and timing
+        setTimeout(() => {
+          const solutionData = {
+            code: data.code,
+            thoughts: data.thoughts,
+            time_complexity: data.time_complexity,
+            space_complexity: data.space_complexity
+          }
 
-        queryClient.setQueryData(["solution"], solutionData)
-        setSolutionData(solutionData.code || null)
-        setThoughtsData(solutionData.thoughts || null)
-        setTimeComplexityData(solutionData.time_complexity || null)
-        setSpaceComplexityData(solutionData.space_complexity || null)
+          queryClient.setQueryData(["solution"], solutionData)
+          setSolutionData(solutionData.code || null)
+          setThoughtsData(solutionData.thoughts || null)
+          setTimeComplexityData(solutionData.time_complexity || null)
+          setSpaceComplexityData(solutionData.space_complexity || null)
+        }, 10) // Small delay to ensure proper state batching
 
         // Fetch latest screenshots when solution is successful
         const fetchScreenshots = async () => {
@@ -369,10 +372,44 @@ const Solutions: React.FC<SolutionsProps> = ({
         //we'll set the debug processing state to true and use that to render a little loader
         setDebugProcessing(true)
       }),
-      //the first time debugging works, we'll set the view to debug and populate the cache with the data
+      // Handle debug success - update the current solution with debug results
       window.electronAPI.onDebugSuccess((data: any) => {
-        queryClient.setQueryData(["new_solution"], data)
+        console.log("Debug success received in Solutions:", data)
         setDebugProcessing(false)
+        
+        setTimeout(() => {
+          if (data) {
+            // Always update the solution code if provided, even if it's the same as before
+            if (data.code && data.code !== "// Debug mode - see analysis below") {
+              setSolutionData(data.code)
+              console.log("Updated solution code with debug result:", data.code.substring(0, 100) + "...")
+            } else if (data.code) {
+              // Even if it's the default message, update it to show debug was processed
+              setSolutionData(data.code)
+            }
+            
+            // Update thoughts with debug insights
+            if (data.thoughts && data.thoughts.length > 0) {
+              setThoughtsData(data.thoughts)
+            }
+            
+            // Update complexities if provided
+            if (data.time_complexity) {
+              setTimeComplexityData(data.time_complexity)
+            }
+            if (data.space_complexity) {
+              setSpaceComplexityData(data.space_complexity)
+            }
+            
+            // Store in query cache as well
+            queryClient.setQueryData(["solution"], {
+              code: data.code || solutionData,
+              thoughts: data.thoughts || thoughtsData,
+              time_complexity: data.time_complexity || timeComplexityData,
+              space_complexity: data.space_complexity || spaceComplexityData
+            })
+          }
+        }, 10)
       }),
       //when there was an error in the initial debugging, we'll show a toast and stop the little generating pulsing thing.
       window.electronAPI.onDebugError(() => {
