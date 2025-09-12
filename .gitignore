@@ -10,3 +10,4 @@ dist
 scripts/
 **/scripts/
 scripts/manual-notarize.js.cursor/
+.cursor/
