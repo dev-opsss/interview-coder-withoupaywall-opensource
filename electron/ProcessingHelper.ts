@@ -202,8 +202,8 @@ export class ProcessingHelper {
         if (config.apiKey) {
           this.openaiClient = new OpenAI({ 
             apiKey: config.apiKey,
-            timeout: 60000, // 60 second timeout
-            maxRetries: 2   // Retry up to 2 times
+            timeout: 30000, // 30 second timeout - reduced from 60s
+            maxRetries: 1   // Reduced retries from 2 to 1 for faster failure
           });
           this.anthropicClient = null;
           safeLog("OpenAI client initialized successfully");
@@ -219,8 +219,8 @@ export class ProcessingHelper {
         if (config.apiKey) {
           this.anthropicClient = new Anthropic({
             apiKey: config.apiKey,
-            timeout: 60000,
-            maxRetries: 2
+            timeout: 30000, // 30 second timeout - reduced from 60s
+            maxRetries: 1   // Reduced retries from 2 to 1 for faster failure
           });
           safeLog("Gemini API key set successfully");
         } else {
@@ -235,8 +235,8 @@ export class ProcessingHelper {
         if (config.apiKey) {
           this.anthropicClient = new Anthropic({
             apiKey: config.apiKey,
-            timeout: 60000,
-            maxRetries: 2
+            timeout: 30000, // 30 second timeout - reduced from 60s
+            maxRetries: 1   // Reduced retries from 2 to 1 for faster failure
           });
           safeLog("Anthropic client initialized successfully");
         } else {
@@ -367,6 +367,12 @@ export class ProcessingHelper {
       const screenshotQueue = this.screenshotHelper.getScreenshotQueue()
       safeLog("Processing main queue screenshots:", screenshotQueue)
       
+      // Send progress update
+      mainWindow.webContents.send("processing-status", {
+        message: "Starting problem extraction...",
+        progress: 10
+      })
+      
       // Check if the queue is empty
       if (!screenshotQueue || screenshotQueue.length === 0) {
         safeLog("No screenshots found in queue");
@@ -444,6 +450,13 @@ export class ProcessingHelper {
 
         // Only set view to solutions if processing succeeded
         safeLog("Setting view to solutions after successful processing")
+        
+        // Save solution data to store for future debug reference
+        this.deps.store.set('lastSolutionData', result.data);
+        
+        // Ensure proper timing for UI updates
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
           result.data
@@ -495,6 +508,12 @@ export class ProcessingHelper {
       }
       
       mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.DEBUG_START)
+      
+      // Send progress update
+      mainWindow.webContents.send("processing-status", {
+        message: "Processing additional screenshot...",
+        progress: 20
+      })
 
       // Initialize AbortController
       this.currentExtraProcessingAbortController = new AbortController()
@@ -506,6 +525,8 @@ export class ProcessingHelper {
           ...this.screenshotHelper.getScreenshotQueue(),
           ...existingExtraScreenshots
         ];
+        
+        // Screenshots loaded for debug processing
         
         const screenshots = await Promise.all(
           allPaths.map(async (path) => {
@@ -551,12 +572,23 @@ export class ProcessingHelper {
           data: s.data
         }));
 
+        // Send progress update before debug processing
+        mainWindow.webContents.send("processing-status", {
+          message: "Analyzing screenshots for debugging...",
+          progress: 50
+        });
+        
         const result = await this.processExtraScreenshotsHelper(
           processReadyScreenshots,
           signal
         )
 
         if (result.success) {
+          // Add delay to ensure proper UI updates
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          safeLog("Sending DEBUG_SUCCESS event with data:", JSON.stringify(result.data, null, 2))
+          
           this.deps.setHasDebugged(true)
           mainWindow.webContents.send(
             this.deps.PROCESSING_EVENTS.DEBUG_SUCCESS,
@@ -807,9 +839,18 @@ export class ProcessingHelper {
           problemInfo
         );
 
+        // Send progress update before solution generation
+        mainWindow.webContents.send("processing-status", {
+          message: "Generating solution...",
+          progress: 60
+        });
+        
         // Generate solutions after successful extraction
+        safeLog("Starting solution generation...")
         const solutionsResult = await this.generateSolutionsHelper(signal);
+        safeLog("Solution generation completed. Success:", solutionsResult.success)
         if (solutionsResult.success) {
+          safeLog("Solution data:", JSON.stringify(solutionsResult.data, null, 2))
           // Clear any existing extra screenshots before transitioning to solutions view
           this.screenshotHelper.clearExtraScreenshotQueue();
           
@@ -819,12 +860,20 @@ export class ProcessingHelper {
             progress: 100
           });
           
+          // Add a small delay to ensure proper UI state transition
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Save solution data to store for future debug reference
+          this.deps.store.set('lastSolutionData', solutionsResult.data);
+          
+          safeLog("Sending SOLUTION_SUCCESS event to renderer")
           mainWindow.webContents.send(
             this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
             solutionsResult.data
           );
           return { success: true, data: solutionsResult.data };
         } else {
+          safeError("Solution generation failed:", solutionsResult.error)
           throw new Error(
             solutionsResult.error || "Failed to generate solutions"
           );
@@ -868,11 +917,14 @@ export class ProcessingHelper {
   }
 
   private async generateSolutionsHelper(signal: AbortSignal) {
+    safeLog("generateSolutionsHelper: Starting solution generation")
     try {
       const problemInfo = this.deps.getProblemInfo();
       const language = await this.getLanguage();
       const config = configHelper.loadConfig();
       const mainWindow = this.deps.getMainWindow();
+      
+      safeLog("generateSolutionsHelper: Config loaded. API Provider:", config.apiProvider)
 
       if (!problemInfo) {
         throw new Error("No problem info available");
@@ -881,9 +933,44 @@ export class ProcessingHelper {
       // Update progress status
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
+          message: "Analyzing screenshots for existing code...",
+          progress: 50
+        });
+      }
+
+      // Get screenshots to analyze for existing code
+      const screenshotQueue = this.deps.getScreenshotQueue();
+      const screenshots: Array<{ path: string; data: string }> = [];
+      
+      for (const screenshotPath of screenshotQueue) {
+        try {
+          const imageData = fs.readFileSync(screenshotPath, "base64");
+          screenshots.push({ path: screenshotPath, data: imageData });
+        } catch (error) {
+          console.error(`Failed to load screenshot ${screenshotPath}:`, error);
+        }
+      }
+
+      // Update progress status
+      if (mainWindow) {
+        mainWindow.webContents.send("processing-status", {
           message: "Creating optimal solution with detailed explanations...",
           progress: 60
         });
+      }
+
+      // Analyze screenshots for existing code
+      let existingCodeContext = "";
+      if (screenshots.length > 0) {
+        existingCodeContext = `
+
+IMPORTANT: I can see screenshots that may contain existing code solutions or attempts. Please analyze the screenshots carefully and:
+- If you see existing code, use it as a reference point
+- If the existing code is incomplete, build upon it
+- If the existing code has issues, improve it while maintaining the same approach when possible
+- If the existing code is already good, explain why it works and suggest any optimizations
+
+Please be specific about what you observe in the screenshots when providing your solution.`;
       }
 
       // Create prompt for solution generation
@@ -902,7 +989,7 @@ ${problemInfo.example_input || "No example input provided."}
 EXAMPLE OUTPUT:
 ${problemInfo.example_output || "No example output provided."}
 
-LANGUAGE: ${language}
+LANGUAGE: ${language}${existingCodeContext}
 
 I need the response in the following format:
 1. Code: A clean, optimized implementation in ${language}
@@ -926,13 +1013,33 @@ Your solution should be efficient, well-commented, and handle edge cases.
           };
         }
         
+        // Prepare messages with screenshots if available
+        const messages: any[] = [
+          { role: "system", content: "You are an expert coding interview assistant. Analyze any screenshots provided to understand existing code solutions, then provide clear, optimal solutions with detailed explanations." }
+        ];
+
+        if (screenshots.length > 0) {
+          // Add user message with text and images
+          const userMessage = {
+            role: "user" as const,
+            content: [
+              { type: "text" as const, text: promptText },
+              ...screenshots.map(screenshot => ({
+                type: "image_url" as const,
+                image_url: { url: `data:image/png;base64,${screenshot.data}` }
+              }))
+            ]
+          };
+          messages.push(userMessage);
+        } else {
+          // Add simple text message if no screenshots
+          messages.push({ role: "user" as const, content: promptText });
+        }
+        
         // Send to OpenAI API
         const solutionResponse = await this.openaiClient.chat.completions.create({
           model: config.solutionModel || "gpt-4o",
-          messages: [
-            { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
-            { role: "user", content: promptText }
-          ],
+          messages: messages as any,
           max_tokens: 4000,
           temperature: 0.2
         });
@@ -948,15 +1055,29 @@ Your solution should be efficient, well-commented, and handle edge cases.
         }
         
         try {
-          // Create Gemini message structure
+          // Create Gemini message structure with screenshots if available
+          const parts: any[] = [
+            {
+              text: `You are an expert coding interview assistant. Analyze any screenshots provided to understand existing code solutions, then provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
+            }
+          ];
+
+          // Add screenshots as inline data if available
+          if (screenshots.length > 0) {
+            screenshots.forEach(screenshot => {
+              parts.push({
+                inlineData: {
+                  mimeType: "image/png",
+                  data: screenshot.data
+                }
+              });
+            });
+          }
+
           const geminiMessages = [
             {
               role: "user",
-              parts: [
-                {
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
-                }
-              ]
+              parts: parts
             }
           ];
 
@@ -1002,15 +1123,32 @@ Your solution should be efficient, well-commented, and handle edge cases.
         }
         
         try {
+          // Prepare content array with text and screenshots
+          const content: any[] = [
+            {
+              type: "text" as const,
+              text: `You are an expert coding interview assistant. Analyze any screenshots provided to understand existing code solutions, then provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
+            }
+          ];
+
+          // Add screenshots if available
+          if (screenshots.length > 0) {
+            screenshots.forEach(screenshot => {
+              content.push({
+                type: "image" as const,
+                source: {
+                  type: "base64" as const,
+                  media_type: "image/png" as const,
+                  data: screenshot.data
+                }
+              });
+            });
+          }
+
           const messages = [
             {
               role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
-                }
-              ]
+              content: content
             }
           ];
 
@@ -1114,6 +1252,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
         space_complexity: spaceComplexity
       };
 
+      safeLog("generateSolutionsHelper: Solution generation successful. Code length:", code.length)
       return { success: true, data: formattedResponse };
     } catch (error: any) {
       if (axios.isCancel(error)) {
@@ -1135,7 +1274,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
         };
       }
       
-      safeError("Solution generation error:", error);
+      safeError("generateSolutionsHelper: Solution generation error:", error);
       return { success: false, error: error.message || "Failed to generate solution" };
     }
   }
@@ -1175,39 +1314,80 @@ Your solution should be efficient, well-commented, and handle edge cases.
           };
         }
         
+        // Get the original solution for context
+        const originalSolution = this.deps.store.get('lastSolutionData') as any;
+        const originalCode = originalSolution?.code || 'No original solution available';
+        
+        safeLog("Debug processing - Original solution code:", originalCode.substring(0, 200) + "...");
+        
         const messages = [
           {
             role: "system" as const, 
-            content: `You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
+            content: `You are an expert coding interview assistant specializing in debugging and code analysis. You will be given:
+1. A coding problem statement
+2. An original working solution 
+3. Screenshots showing current code, error messages, test failures, or incorrect outputs
 
-Your response MUST follow this exact structure with these section headers (use ### for headers):
+Your job is to:
+- Compare the current code (from screenshots) with the original working solution
+- Identify exactly what went wrong and why
+- Provide precise fixes that address the specific issues shown
+- Ensure the corrected code maintains the original algorithm's correctness
+
+CRITICAL: Always provide a complete, corrected version of the code that fixes the identified issues.
+
+Your response MUST follow this exact structure:
 ### Issues Identified
-- List each issue as a bullet point with clear explanation
+- List each specific issue found with clear explanation
+- Reference line numbers or code sections when visible
 
-### Specific Improvements and Corrections
-- List specific code changes needed as bullet points
+### Root Cause Analysis  
+- Explain the underlying cause of each issue
+- Connect errors to specific code changes or logic problems
 
-### Optimizations
-- List any performance optimizations if applicable
+### Corrected Code Solution
+\`\`\`${language.toLowerCase()}
+// Provide the complete corrected code here
+// Include all necessary parts, not just the changed sections
+\`\`\`
 
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
+### Explanation of Fixes
+- Explain why each change fixes the identified problem
+- Show before/after comparisons for key changes
 
-### Key Points
-- Summary bullet points of the most important takeaways
-
-If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).`
+### Testing Recommendations
+- Suggest specific test cases to verify the fix
+- Mention edge cases to validate`
           },
           {
             role: "user" as const,
             content: [
               {
                 type: "text" as const, 
-                text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
-1. What issues you found in my code
-2. Specific improvements and corrections
-3. Any optimizations that would make the solution better
-4. A clear explanation of the changes needed` 
+                text: `CRITICAL DEBUGGING REQUEST:
+Problem: "${problemInfo.problem_statement}"
+Language: ${language}
+
+ORIGINAL WORKING SOLUTION:
+\`\`\`${language.toLowerCase()}
+${originalCode}
+\`\`\`
+
+URGENT: I need you to analyze the EXACT ERROR shown in the screenshots.
+
+WHAT TO LOOK FOR IN THE SCREENSHOTS:
+1. **Error Messages**: Look for runtime errors, syntax errors, compilation errors
+2. **Test Case Failures**: Check if specific test cases are failing
+3. **Code Differences**: Compare what's visible in the screenshot with the original solution
+4. **Line Numbers**: Pay attention to specific line numbers mentioned in errors
+
+REQUIREMENTS:
+- **BE SPECIFIC**: Reference the exact error message you see in the screenshot
+- **BE PRECISE**: Identify the exact line and character causing the issue
+- **PROVIDE WORKING CODE**: Give the complete corrected solution that fixes the visible error
+- **EXPLAIN THE FIX**: Explain exactly what was wrong and why your fix works
+
+DO NOT give generic responses. Analyze the ACTUAL error shown in the screenshot and provide a targeted solution.` 
               },
               ...imageDataList.map(data => ({
                 type: "image_url" as const,
@@ -1230,7 +1410,6 @@ If you include code examples, use proper markdown code blocks with language spec
           max_tokens: 4000,
           temperature: 0.2
         });
-        
         debugContent = debugResponse.choices[0].message.content;
       } else if (config.apiProvider === "gemini")  {
         if (!this.anthropicClient) {
@@ -1241,39 +1420,76 @@ If you include code examples, use proper markdown code blocks with language spec
         }
         
         try {
+          // Get the original solution for context
+          const originalSolution = this.deps.store.get('lastSolutionData') as any;
+          const originalCode = originalSolution?.code || 'No original solution available';
+          
           const debugPrompt = `
-You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
+You are an expert coding interview assistant specializing in debugging and code analysis. You will be given:
+1. A coding problem statement
+2. An original working solution 
+3. Screenshots showing current code, error messages, test failures, or incorrect outputs
 
-I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution.
+Your job is to:
+- Compare the current code (from screenshots) with the original working solution
+- Identify exactly what went wrong and why
+- Provide precise fixes that address the specific issues shown
+- Ensure the corrected code maintains the original algorithm's correctness
 
-YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE WITH THESE SECTION HEADERS:
+CRITICAL: Always provide a complete, corrected version of the code that fixes the identified issues.
+
+YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
 ### Issues Identified
-- List each issue as a bullet point with clear explanation
+- List each specific issue found with clear explanation
+- Reference line numbers or code sections when visible
 
-### Specific Improvements and Corrections
-- List specific code changes needed as bullet points
+### Root Cause Analysis  
+- Explain the underlying cause of each issue
+- Connect errors to specific code changes or logic problems
 
-### Optimizations
-- List any performance optimizations if applicable
+### Corrected Code Solution
+\`\`\`${language.toLowerCase()}
+// Provide the complete corrected code here
+// Include all necessary parts, not just the changed sections
+\`\`\`
 
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
+### Explanation of Fixes
+- Explain why each change fixes the identified problem
+- Show before/after comparisons for key changes
 
-### Key Points
-- Summary bullet points of the most important takeaways
-
-If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).
+### Testing Recommendations
+- Suggest specific test cases to verify the fix
+- Mention edge cases to validate
 `;
 
           const geminiMessages = [
             {
               role: "user",
               parts: [
-                { text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
-1. What issues you found in my code
-2. Specific improvements and corrections
-3. Any optimizations that would make the solution better
-4. A clear explanation of the changes needed` },
+                { text: `CRITICAL DEBUGGING REQUEST:
+Problem: "${problemInfo.problem_statement}"
+Language: ${language}
+
+ORIGINAL WORKING SOLUTION:
+\`\`\`${language.toLowerCase()}
+${originalCode}
+\`\`\`
+
+URGENT: Analyze the EXACT ERROR shown in the screenshots.
+
+WHAT TO LOOK FOR:
+1. **Error Messages**: Look for runtime errors, syntax errors, compilation errors
+2. **Test Case Failures**: Check if specific test cases are failing  
+3. **Code Differences**: Compare visible code with the original solution
+4. **Line Numbers**: Pay attention to specific line numbers in errors
+
+REQUIREMENTS:
+- **BE SPECIFIC**: Reference the exact error message you see
+- **BE PRECISE**: Identify the exact line and character causing the issue
+- **PROVIDE WORKING CODE**: Give complete corrected solution that fixes the visible error
+- **EXPLAIN THE FIX**: Explain exactly what was wrong and why your fix works
+
+DO NOT give generic responses. Analyze the ACTUAL error in the screenshot.` },
                 ...imageDataList.map(data => ({
                   inlineData: {
                     mimeType: "image/png",
@@ -1331,28 +1547,46 @@ If you include code examples, use proper markdown code blocks with language spec
         }
         
         try {
+          // Get the original solution for context
+          const originalSolution = this.deps.store.get('lastSolutionData') as any;
+          const originalCode = originalSolution?.code || 'No original solution available';
+          
           const debugPrompt = `
-You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
+You are an expert coding interview assistant specializing in debugging and code analysis. You will be given:
+1. A coding problem statement
+2. An original working solution 
+3. Screenshots showing current code, error messages, test failures, or incorrect outputs
 
-I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution.
+Your job is to:
+- Compare the current code (from screenshots) with the original working solution
+- Identify exactly what went wrong and why
+- Provide precise fixes that address the specific issues shown
+- Ensure the corrected code maintains the original algorithm's correctness
 
-YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE WITH THESE SECTION HEADERS:
+CRITICAL: Always provide a complete, corrected version of the code that fixes the identified issues.
+
+YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE:
 ### Issues Identified
-- List each issue as a bullet point with clear explanation
+- List each specific issue found with clear explanation
+- Reference line numbers or code sections when visible
 
-### Specific Improvements and Corrections
-- List specific code changes needed as bullet points
+### Root Cause Analysis  
+- Explain the underlying cause of each issue
+- Connect errors to specific code changes or logic problems
 
-### Optimizations
-- List any performance optimizations if applicable
+### Corrected Code Solution
+\`\`\`${language.toLowerCase()}
+// Provide the complete corrected code here
+// Include all necessary parts, not just the changed sections
+\`\`\`
 
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
+### Explanation of Fixes
+- Explain why each change fixes the identified problem
+- Show before/after comparisons for key changes
 
-### Key Points
-- Summary bullet points of the most important takeaways
-
-If you include code examples, use proper markdown code blocks with language specification.
+### Testing Recommendations
+- Suggest specific test cases to verify the fix
+- Mention edge cases to validate
 `;
 
           const messages = [
@@ -1361,11 +1595,30 @@ If you include code examples, use proper markdown code blocks with language spec
               content: [
                 {
                   type: "text" as const,
-                  text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
-1. What issues you found in my code
-2. Specific improvements and corrections
-3. Any optimizations that would make the solution better
-4. A clear explanation of the changes needed`
+                  text: `CRITICAL DEBUGGING REQUEST:
+Problem: "${problemInfo.problem_statement}"
+Language: ${language}
+
+ORIGINAL WORKING SOLUTION:
+\`\`\`${language.toLowerCase()}
+${originalCode}
+\`\`\`
+
+URGENT: Analyze the EXACT ERROR shown in the screenshots.
+
+WHAT TO LOOK FOR:
+1. **Error Messages**: Look for runtime errors, syntax errors, compilation errors
+2. **Test Case Failures**: Check if specific test cases are failing  
+3. **Code Differences**: Compare visible code with the original solution
+4. **Line Numbers**: Pay attention to specific line numbers in errors
+
+REQUIREMENTS:
+- **BE SPECIFIC**: Reference the exact error message you see
+- **BE PRECISE**: Identify the exact line and character causing the issue
+- **PROVIDE WORKING CODE**: Give complete corrected solution that fixes the visible error
+- **EXPLAIN THE FIX**: Explain exactly what was wrong and why your fix works
+
+DO NOT give generic responses. Analyze the ACTUAL error in the screenshot.`
                 },
                 ...imageDataList.map(data => ({
                   type: "image" as const,
@@ -1392,7 +1645,6 @@ If you include code examples, use proper markdown code blocks with language spec
             messages: messages,
             temperature: 0.2
           });
-          
           debugContent = (response.content[0] as { type: 'text', text: string }).text;
         } catch (error: any) {
           safeError("Error using Anthropic API for debugging:", error);
@@ -1425,26 +1677,83 @@ If you include code examples, use proper markdown code blocks with language spec
         });
       }
 
+      // Extract the corrected code from the debug response
       let extractedCode = "// Debug mode - see analysis below";
-      const codeMatch = debugContent?.match(/```(?:[a-zA-Z]+)?([\s\S]*?)```/);
-      if (codeMatch && codeMatch[1]) {
-        extractedCode = codeMatch[1].trim();
+      
+      safeLog("Debug response content preview:", debugContent?.substring(0, 500) + "...");
+      
+      // Look for code in the "Corrected Code Solution" section specifically
+      const correctedCodeMatch = debugContent?.match(/### Corrected Code Solution[\s\S]*?```[a-zA-Z]*\n([\s\S]*?)\n```/);
+      if (correctedCodeMatch && correctedCodeMatch[1]) {
+        extractedCode = correctedCodeMatch[1].trim();
+        safeLog("Found code in Corrected Code Solution section");
+      } else {
+        // Look for "Fixed Solution" or similar patterns
+        const fixedSolutionMatch = debugContent?.match(/(?:Fixed Solution|Here's the corrected|corrected solution)[\s\S]*?```[a-zA-Z]*\n([\s\S]*?)\n```/i);
+        if (fixedSolutionMatch && fixedSolutionMatch[1]) {
+          extractedCode = fixedSolutionMatch[1].trim();
+          safeLog("Found code in Fixed Solution section");
+        } else {
+          // Get all code blocks and filter out error messages
+          const allCodeBlocks = debugContent?.match(/```[a-zA-Z]*\n([\s\S]*?)\n```/g);
+          if (allCodeBlocks && allCodeBlocks.length > 0) {
+            // Find the largest code block that doesn't look like an error message
+            let bestCode = "";
+            for (const block of allCodeBlocks) {
+              const codeContent = block.replace(/```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
+              // Skip if it looks like an error message or is too short
+              if (codeContent.length > bestCode.length && 
+                  !codeContent.toLowerCase().includes('syntaxerror') &&
+                  !codeContent.toLowerCase().includes('error message') &&
+                  codeContent.length > 50 &&
+                  (codeContent.includes('def ') || codeContent.includes('class ') || codeContent.includes('function'))) {
+                bestCode = codeContent;
+              }
+            }
+            if (bestCode) {
+              extractedCode = bestCode;
+              safeLog("Found best code block, length:", bestCode.length);
+            } else {
+              safeLog("No suitable code block found, keeping default");
+            }
+          }
+        }
       }
 
       let formattedDebugContent = debugContent || '';
       
-      if (!debugContent?.includes('# ') && !debugContent?.includes('## ')) {
-        formattedDebugContent = formattedDebugContent
-          .replace(/issues identified|problems found|bugs found/i, '## Issues Identified')
-          .replace(/code improvements|improvements|suggested changes/i, '## Code Improvements')
-          .replace(/optimizations|performance improvements/i, '## Optimizations')
-          .replace(/explanation|detailed analysis/i, '## Explanation');
+      // Extract key insights for the thoughts array
+      const thoughts = [];
+      
+      // Extract issues from the "Issues Identified" section
+      const issuesMatch = formattedDebugContent.match(/### Issues Identified([\s\S]*?)(?=###|$)/);
+      if (issuesMatch) {
+        const issues = issuesMatch[1].match(/- ([^\n]+)/g);
+        if (issues) {
+          thoughts.push(...issues.map(issue => `🔍 ${issue.replace(/^- /, '')}`).slice(0, 2));
+        }
       }
-
-      const bulletPoints = formattedDebugContent.match(/(?:^|\n)[ ]*(?:[-*•]|\d+\.)[ ]+([^\n]+)/g);
-      const thoughts = bulletPoints 
-        ? bulletPoints.map(point => point.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()).slice(0, 5)
-        : ["Debug analysis based on your screenshots"];
+      
+      // Extract fixes from the "Explanation of Fixes" section
+      const fixesMatch = formattedDebugContent.match(/### Explanation of Fixes([\s\S]*?)(?=###|$)/);
+      if (fixesMatch) {
+        const fixes = fixesMatch[1].match(/- ([^\n]+)/g);
+        if (fixes) {
+          thoughts.push(...fixes.map(fix => `🔧 ${fix.replace(/^- /, '')}`).slice(0, 2));
+        }
+      }
+      
+      // Fallback if no specific sections found
+      if (thoughts.length === 0) {
+        const bulletPoints = formattedDebugContent.match(/(?:^|\n)[ ]*(?:[-*•]|\d+\.)[ ]+([^\n]+)/g);
+        if (bulletPoints) {
+          thoughts.push(...bulletPoints.map(point => 
+            point.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()
+          ).slice(0, 4));
+        } else {
+          thoughts.push("Debug analysis completed - check the corrected code");
+        }
+      }
       
       const response = {
         code: extractedCode,
@@ -1454,6 +1763,9 @@ If you include code examples, use proper markdown code blocks with language spec
         space_complexity: "N/A - Debug mode"
       };
 
+      safeLog("Debug processing completed. Extracted code length:", extractedCode.length, "First 100 chars:", extractedCode.substring(0, 100))
+      safeLog("Debug response thoughts:", thoughts)
+      
       return { success: true, data: response };
     } catch (error: any) {
       safeError("Debug processing error:", error);
@@ -1737,18 +2049,6 @@ If you include code examples, use proper markdown code blocks with language spec
     try {
       safeLog(`Generating response suggestion for question: "${question}" (as ${speakerRole})`);
       const config = configHelper.loadConfig();
-      if (!this.openaiClient && !config.apiKey) {
-        return { success: false, error: "OpenAI API key not configured" };
-      }
-
-      // Ensure OpenAI client is initialized
-      if (!this.openaiClient && config.apiKey) {
-        this.initializeAIClient();
-      }
-
-      if (!this.openaiClient) {
-        return { success: false, error: "Failed to initialize OpenAI client" };
-      }
 
       // Clean the transcript for better response quality
       const cleanedQuestion = this.cleanTranscriptForSuggestion(question);
@@ -1792,33 +2092,95 @@ OUTPUT REQUIREMENTS:
 
       // Only proceed if a prompt template was actually generated (i.e., if the interviewer spoke)
       if (promptTemplate) {
-      // ---> MODIFICATION: Replace stubbed response with actual OpenAI call <---
-      if (!this.openaiClient) {
-          safeError('OpenAI client not initialized in ProcessingHelper for generateResponseSuggestion');
-          return { success: false, error: 'OpenAI client not initialized' };
-      }
+        const config = configHelper.loadConfig();
+        let suggestion: string | undefined;
 
-        const messages: { role: 'system' | 'user'; content: string }[] = [
-          { role: "system", content: "You are an AI interview assistant." },
-          { role: "user", content: promptTemplate }
-        ];
+        safeLog(`generateResponseSuggestion: Using API provider: ${config.apiProvider}`);
+        safeLog(`generateResponseSuggestion: OpenAI client exists: ${!!this.openaiClient}`);
+        safeLog(`generateResponseSuggestion: Anthropic client exists: ${!!this.anthropicClient}`);
 
-      // Get the general model from config, or use a default for suggestions
-      const modelForSuggestions = (config.apiProvider === "openai" && config.solutionModel) ? config.solutionModel : "gpt-3.5-turbo";
+        // Use the configured API provider for suggestions
+        if (config.apiProvider === "openai") {
+          if (!this.openaiClient) {
+            safeError('OpenAI client not initialized in ProcessingHelper for generateResponseSuggestion');
+            return { success: false, error: 'OpenAI client not initialized' };
+          }
 
-      const completion = await this.openaiClient.chat.completions.create({
-        model: modelForSuggestions, // Use the determined model
-          messages: messages,
-        max_tokens: 2000, // Adjust as needed for talking points
-        temperature: 0.5, // Lower temperature for more focused suggestions
-      });
+          const messages: { role: 'system' | 'user'; content: string }[] = [
+            { role: "system", content: "You are an AI interview assistant." },
+            { role: "user", content: promptTemplate }
+          ];
 
-      const suggestion = completion.choices[0]?.message?.content?.trim();
+          const modelForSuggestions = config.solutionModel || "gpt-3.5-turbo";
+
+          const completion = await this.openaiClient.chat.completions.create({
+            model: modelForSuggestions,
+            messages: messages,
+            max_tokens: 2000,
+            temperature: 0.5,
+          });
+
+          suggestion = completion.choices[0]?.message?.content?.trim();
+
+        } else if (config.apiProvider === "anthropic") {
+          if (!this.anthropicClient) {
+            safeError('Anthropic client not initialized in ProcessingHelper for generateResponseSuggestion');
+            return { success: false, error: 'Anthropic client not initialized' };
+          }
+
+          const response = await this.anthropicClient.messages.create({
+            model: config.solutionModel || "claude-3-haiku-20240307",
+            max_tokens: 2000,
+            temperature: 0.5,
+            messages: [{
+              role: "user",
+              content: `You are an AI interview assistant.\n\n${promptTemplate}`
+            }]
+          });
+
+          suggestion = (response.content[0] as { type: 'text', text: string }).text?.trim();
+
+        } else if (config.apiProvider === "gemini") {
+          if (!config.apiKey) {
+            safeError('Gemini API key not configured for generateResponseSuggestion');
+            return { success: false, error: 'Gemini API key not configured' };
+          }
+
+          try {
+            const geminiMessages = [{
+              role: "user",
+              parts: [{
+                text: `You are an AI interview assistant.\n\n${promptTemplate}`
+              }]
+            }];
+
+            const response = await axios.default.post(
+              `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${config.apiKey}`,
+              {
+                contents: geminiMessages,
+                generationConfig: {
+                  temperature: 0.5,
+                  maxOutputTokens: 2000
+                }
+              }
+            );
+
+            const responseData = response.data as any;
+            if (responseData.candidates && responseData.candidates.length > 0) {
+              suggestion = responseData.candidates[0].content.parts[0].text?.trim();
+            }
+          } catch (error) {
+            safeError("Error using Gemini API for suggestions:", error);
+            return { success: false, error: "Failed to generate suggestion with Gemini API" };
+          }
+        } else {
+          return { success: false, error: "Unsupported API provider for suggestions" };
+        }
 
       if (suggestion) {
         return { success: true, data: suggestion };
       } else {
-        safeError("No suggestion content received from OpenAI in generateResponseSuggestion");
+        safeError("No suggestion content received from AI in generateResponseSuggestion");
         return { success: false, error: "Failed to get a valid suggestion from AI." };
       }
       // --- END MODIFICATION ---

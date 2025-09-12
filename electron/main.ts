@@ -275,6 +275,7 @@ export interface IProcessingHelperDeps {
   ) => Promise<{ success: boolean; error?: string }>
   setHasDebugged: (value: boolean) => void
   getHasDebugged: () => boolean
+  store: any
   PROCESSING_EVENTS: typeof state.PROCESSING_EVENTS
 }
 
@@ -335,6 +336,7 @@ function initializeHelpers() {
     deleteScreenshot,
     setHasDebugged,
     getHasDebugged,
+    store: getStoreInstance(),
     PROCESSING_EVENTS: state.PROCESSING_EVENTS
   } as IProcessingHelperDeps)
   

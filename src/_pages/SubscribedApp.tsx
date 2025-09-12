@@ -100,6 +100,9 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
       window.electronAPI.onSolutionStart(() => {
         setView("solutions")
       }),
+      window.electronAPI.onSolutionSuccess((data: any) => {
+        setView("solutions")
+      }),
       window.electronAPI.onUnauthorized(() => {
         queryClient.removeQueries({
           queryKey: ["screenshots"]

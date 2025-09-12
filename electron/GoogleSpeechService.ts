@@ -949,6 +949,11 @@ export class GoogleSpeechService {
       if (audioData.data && Array.isArray(audioData.data) && audioData.type === 'Buffer') {
         console.log(`---> GSS handleAudioData: Object looks like a serialized Buffer. data.length: ${audioData.data.length}`); // DEBUG
       }
+      // Handle object with audio property (from VoiceTranscriptionPanel)
+      if (audioData.audio) {
+        console.log(`---> GSS handleAudioData: Found audio property in object, extracting...`); // DEBUG
+        audioData = audioData.audio; // Extract the audio data
+      }
     }
 
     if (!this.isStreaming || !this.streamingRecognizeStream || !this.audioInputStream) {
@@ -963,6 +968,9 @@ export class GoogleSpeechService {
     } else if (audioData instanceof ArrayBuffer) {
       bufferToProcess = Buffer.from(audioData);
       console.log(`---> GSS handleAudioData: Converted ArrayBuffer to Buffer. Length: ${bufferToProcess.length}`); // DEBUG
+    } else if (audioData instanceof Uint8Array) {
+      bufferToProcess = Buffer.from(audioData);
+      console.log(`---> GSS handleAudioData: Converted Uint8Array to Buffer. Length: ${bufferToProcess.length}`); // DEBUG
     } else if (audioData && audioData.type === 'Buffer' && Array.isArray(audioData.data)) { // Handle objectified Buffer (common over IPC)
       bufferToProcess = Buffer.from(audioData.data);
       console.log(`---> GSS handleAudioData: Reconstructed Buffer from object. Length: ${bufferToProcess.length}`); // DEBUG
@@ -970,7 +978,11 @@ export class GoogleSpeechService {
       bufferToProcess = Buffer.from(audioData.buffer, audioData.byteOffset, audioData.byteLength);
       console.warn("---> GSS handleAudioData: Received Int16Array directly (unexpected for current renderer logic). Converted to Buffer."); // DEBUG
     } else {
-      console.warn(`---> GSS handleAudioData: Received unexpected audio data format: ${typeof audioData}. Data snippet: ${JSON.stringify(audioData)?.substring(0,100)}... Ignoring.`); // DEBUG
+      // Safely log the error without trying to stringify potentially binary data
+      const dataType = typeof audioData;
+      const isArray = Array.isArray(audioData);
+      const constructor = audioData?.constructor?.name || 'unknown';
+      console.warn(`---> GSS handleAudioData: Received unexpected audio data format. Type: ${dataType}, IsArray: ${isArray}, Constructor: ${constructor}. Ignoring.`); // DEBUG
       return;
     }
 

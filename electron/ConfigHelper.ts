@@ -9,6 +9,10 @@ import crypto from "crypto"
 interface Config {
   apiKey: string;
   apiProvider: "openai" | "gemini" | "anthropic";  // Added provider selection
+  // Add separate API keys for each provider
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  anthropicApiKey?: string;
   extractionModel: string;
   solutionModel: string;
   debuggingModel: string;
@@ -68,10 +72,14 @@ export class ConfigHelper {
   private configPath: string;
   private defaultConfig: Config = {
     apiKey: "",
-    apiProvider: "gemini", // Default to Gemini
-    extractionModel: "gemini-2.0-flash", // Default to Flash for faster responses
-    solutionModel: "gemini-2.0-flash",
-    debuggingModel: "gemini-2.0-flash",
+    apiProvider: "gemini", // Default to Gemini for speed
+    // Initialize separate API keys for each provider
+    openaiApiKey: "",
+    geminiApiKey: "",
+    anthropicApiKey: "",
+    extractionModel: "gemini-2.0-flash", // Fastest model for extraction
+    solutionModel: "gemini-2.0-flash", // Fastest model for solutions
+    debuggingModel: "gemini-2.0-flash", // Fastest model for debugging
     language: "python",
     opacity: 1.0,
     // Add default speech service settings
@@ -249,20 +257,72 @@ export class ConfigHelper {
         updates.apiProvider = provider;
       }
       
-      // If provider is changing, reset models to the default for that provider
+      // Handle provider-specific API key updates
+      if (updates.apiKey !== undefined) {
+        // Store the API key in the provider-specific field
+        if (provider === "openai") {
+          updates.openaiApiKey = updates.apiKey;
+        } else if (provider === "gemini") {
+          updates.geminiApiKey = updates.apiKey;
+        } else if (provider === "anthropic") {
+          updates.anthropicApiKey = updates.apiKey;
+        }
+      }
+      
+      // Handle individual provider API key updates
+      if (updates.openaiApiKey !== undefined) {
+        // If we're setting OpenAI key and it's the current provider, update main apiKey
+        if (provider === "openai") {
+          updates.apiKey = updates.openaiApiKey;
+        }
+      }
+      if (updates.geminiApiKey !== undefined) {
+        // If we're setting Gemini key and it's the current provider, update main apiKey
+        if (provider === "gemini") {
+          updates.apiKey = updates.geminiApiKey;
+        }
+      }
+      if (updates.anthropicApiKey !== undefined) {
+        // If we're setting Anthropic key and it's the current provider, update main apiKey
+        if (provider === "anthropic") {
+          updates.apiKey = updates.anthropicApiKey;
+        }
+      }
+      
+      // If provider is changing, update the main apiKey from the provider-specific key
       if (updates.apiProvider && updates.apiProvider !== currentConfig.apiProvider) {
-        if (updates.apiProvider === "openai") {
+        const newProvider = updates.apiProvider;
+        if (newProvider === "openai" && (currentConfig.openaiApiKey || updates.openaiApiKey)) {
+          updates.apiKey = updates.openaiApiKey || currentConfig.openaiApiKey || "";
           updates.extractionModel = "gpt-4o";
           updates.solutionModel = "gpt-4o";
           updates.debuggingModel = "gpt-4o";
-        } else if (updates.apiProvider === "anthropic") {
+        } else if (newProvider === "gemini" && (currentConfig.geminiApiKey || updates.geminiApiKey)) {
+          updates.apiKey = updates.geminiApiKey || currentConfig.geminiApiKey || "";
+          updates.extractionModel = "gemini-2.0-flash";
+          updates.solutionModel = "gemini-2.0-flash";
+          updates.debuggingModel = "gemini-2.0-flash";
+        } else if (newProvider === "anthropic" && (currentConfig.anthropicApiKey || updates.anthropicApiKey)) {
+          updates.apiKey = updates.anthropicApiKey || currentConfig.anthropicApiKey || "";
           updates.extractionModel = "claude-3-7-sonnet-20250219";
           updates.solutionModel = "claude-3-7-sonnet-20250219";
           updates.debuggingModel = "claude-3-7-sonnet-20250219";
         } else {
-          updates.extractionModel = "gemini-2.0-flash";
-          updates.solutionModel = "gemini-2.0-flash";
-          updates.debuggingModel = "gemini-2.0-flash";
+          // No key available for the new provider, clear main apiKey
+          updates.apiKey = "";
+          if (newProvider === "openai") {
+            updates.extractionModel = "gpt-4o";
+            updates.solutionModel = "gpt-4o";
+            updates.debuggingModel = "gpt-4o";
+          } else if (newProvider === "anthropic") {
+            updates.extractionModel = "claude-3-7-sonnet-20250219";
+            updates.solutionModel = "claude-3-7-sonnet-20250219";
+            updates.debuggingModel = "claude-3-7-sonnet-20250219";
+          } else {
+            updates.extractionModel = "gemini-2.0-flash";
+            updates.solutionModel = "gemini-2.0-flash";
+            updates.debuggingModel = "gemini-2.0-flash";
+          }
         }
       }
       
@@ -283,6 +343,7 @@ export class ConfigHelper {
       // Only emit update event for changes other than opacity
       // This prevents re-initializing the AI client when only opacity changes
       if (updates.apiKey !== undefined || updates.apiProvider !== undefined || 
+          updates.openaiApiKey !== undefined || updates.geminiApiKey !== undefined || updates.anthropicApiKey !== undefined ||
           updates.extractionModel !== undefined || updates.solutionModel !== undefined || 
           updates.debuggingModel !== undefined || updates.language !== undefined) {
         this.emit('config-updated', newConfig);
@@ -485,16 +546,29 @@ export class ConfigHelper {
   }
 
   /**
-   * Specially get OpenAI API key - only returns the API key if the provider is OpenAI
+   * Get the OpenAI API key
    */
   public getOpenAIApiKey(): string {
     const config = this.loadConfig();
-    // Only return the API key if the provider is OpenAI or if key starts with "sk-" (OpenAI format)
-    if (config.apiProvider === "openai" || (config.apiKey && config.apiKey.startsWith('sk-') && !config.apiKey.startsWith('sk-ant-'))) {
-      return config.apiKey;
-    }
-    return ""; // Return empty string if not OpenAI
+    return config.openaiApiKey || "";
   }
+
+  /**
+   * Get the Gemini API key
+   */
+  public getGeminiApiKey(): string {
+    const config = this.loadConfig();
+    return config.geminiApiKey || "";
+  }
+
+  /**
+   * Get the Anthropic API key
+   */
+  public getAnthropicApiKey(): string {
+    const config = this.loadConfig();
+    return config.anthropicApiKey || "";
+  }
+
 
   /**
    * Get the speech service type (whisper or google)
@@ -561,7 +635,7 @@ export class ConfigHelper {
             config: {
               encoding: 'LINEAR16',
               sampleRateHertz: 16000,
-              languageCode: '',
+              languageCode: 'en-US',
               model: 'command_and_search',
             },
             audio: {
