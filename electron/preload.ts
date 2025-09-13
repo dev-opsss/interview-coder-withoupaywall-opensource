@@ -209,6 +209,11 @@ const electronAPI = {
   getSpeechService: () => ipcRenderer.invoke('getSpeechService'),
   setSpeechService: (service: 'whisper' | 'google') => ipcRenderer.invoke('setSpeechService', service), // Renamed from saveSpeechService
   testGoogleSpeechApiKey: () => ipcRenderer.invoke('testGoogleSpeechApiKey'), // Added based on usage
+  // Stealth mode methods
+  enableStealthMode: () => ipcRenderer.invoke('enable-stealth-mode'),
+  disableStealthMode: () => ipcRenderer.invoke('disable-stealth-mode'),
+  getProcessInfo: () => ipcRenderer.invoke('get-process-info'),
+  forceQuitApp: () => ipcRenderer.invoke('force-quit-app'),
   hasServiceAccountCredentials: () => ipcRenderer.invoke('has-service-account-credentials'),
   setServiceAccountCredentialsFromFile: (filePath: string) => 
     ipcRenderer.invoke('set-service-account-credentials-from-file', filePath),

@@ -32,11 +32,57 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
   const { showToast } = useToast()
+  
+  // Stealth mode state
+  const [stealthMode, setStealthMode] = useState(false)
+  const [processInfo, setProcessInfo] = useState<any>(null)
+
+  // Load stealth mode state on component mount
+  useEffect(() => {
+    const loadStealthState = async () => {
+      try {
+        const info = await window.electronAPI.getProcessInfo()
+        setProcessInfo(info)
+        // You could also check if stealth mode is currently active here
+      } catch (error) {
+        console.error('Failed to load process info:', error)
+      }
+    }
+    loadStealthState()
+  }, [])
 
   // Handle AI Chat toggle
   const handleToggleChat = () => {
     onToggleChat();
   };
+
+  // Handle stealth mode toggle
+  const toggleStealthMode = async () => {
+    try {
+      if (stealthMode) {
+        await window.electronAPI.disableStealthMode()
+        setStealthMode(false)
+        showToast("Stealth Mode", "Stealth mode disabled", "success")
+      } else {
+        await window.electronAPI.enableStealthMode()
+        setStealthMode(true)
+        showToast("Stealth Mode", "Stealth mode enabled - app is now hidden", "success")
+      }
+    } catch (error) {
+      console.error('Failed to toggle stealth mode:', error)
+      showToast("Error", "Failed to toggle stealth mode", "error")
+    }
+  }
+
+  // Handle force quit
+  const handleForceQuit = async () => {
+    try {
+      await window.electronAPI.forceQuitApp()
+    } catch (error) {
+      console.error('Failed to force quit:', error)
+      showToast("Error", "Failed to quit application", "error")
+    }
+  }
 
   // Extract the repeated language selection logic into a separate function
   const extractLanguagesAndUpdate = (direction?: 'next' | 'prev') => {
@@ -232,6 +278,37 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                 <path d="M12 21C7.85786 21 4.5 17.6421 4.5 13.5C4.5 9.35786 7.85786 6 12 6C16.1421 6 19.5 9.35786 19.5 13.5C19.5 17.6421 16.1421 21 12 21Z" stroke="currentColor" strokeWidth="1.5"/>
              </svg>
             <span className="text-[11px] leading-none">Live Assist</span>
+          </div>
+
+          {/* Separator */}
+          <div className="mx-2 h-4 w-px bg-white/20" />
+
+          {/* Stealth Mode Button */}
+          <div
+            className={`flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 transition-colors ${ 
+              stealthMode 
+                ? "bg-purple-600 text-white" 
+                : "hover:bg-white/10 text-white/70"
+            }`}
+            title={stealthMode ? "Disable Stealth Mode" : "Enable Stealth Mode"}
+            onClick={toggleStealthMode}
+          >
+            <span className="text-xs">🥷</span>
+            <span className="text-[11px] leading-none">
+              {stealthMode ? "Stealth ON" : "Stealth"}
+            </span>
+          </div>
+
+          {/* Force Quit Button */}
+          <div
+            className="flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 hover:bg-red-600/20 text-red-400 hover:text-red-300 transition-colors"
+            title="Force Quit Application"
+            onClick={handleForceQuit}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span className="text-[11px] leading-none">Quit</span>
           </div>
           
           {/* Settings with Tooltip */}

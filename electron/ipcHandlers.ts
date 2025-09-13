@@ -733,6 +733,94 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   })
   safeLog("Registered IPC handler: testGoogleSpeechApiKey");
 
+  // Stealth mode handlers
+  ipcMain.handle('enable-stealth-mode', async () => {
+    try {
+      // Enable maximum stealth mode
+      const mainWindow = deps.getMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setOpacity(0);
+        mainWindow.setIgnoreMouseEvents(true, { forward: true });
+        mainWindow.minimize();
+        
+        // Platform-specific hiding
+        if (process.platform === "darwin") {
+          mainWindow.setHiddenInMissionControl(true);
+          mainWindow.setSkipTaskbar(true);
+        } else if (process.platform === "win32") {
+          mainWindow.setSkipTaskbar(true);
+          mainWindow.setPosition(-2000, -2000);
+        }
+        
+        // Change process title
+        process.title = "System Process";
+        
+        return { success: true, message: "Stealth mode enabled" };
+      }
+      return { success: false, error: "Main window not available" };
+    } catch (error: any) {
+      console.error('Error enabling stealth mode:', error);
+      return { success: false, error: error.message };
+    }
+  })
+  safeLog("Registered IPC handler: enable-stealth-mode");
+
+  ipcMain.handle('disable-stealth-mode', async () => {
+    try {
+      const mainWindow = deps.getMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setOpacity(1);
+        mainWindow.setIgnoreMouseEvents(false);
+        mainWindow.restore();
+        mainWindow.show();
+        
+        // Restore process title
+        process.title = "Interview Coder";
+        
+        return { success: true, message: "Stealth mode disabled" };
+      }
+      return { success: false, error: "Main window not available" };
+    } catch (error: any) {
+      console.error('Error disabling stealth mode:', error);
+      return { success: false, error: error.message };
+    }
+  })
+  safeLog("Registered IPC handler: disable-stealth-mode");
+
+  ipcMain.handle('get-process-info', async () => {
+    try {
+      return {
+        pid: process.pid,
+        title: process.title,
+        platform: process.platform,
+        argv: process.argv.slice(2), // Hide full path
+        version: process.version
+      };
+    } catch (error: any) {
+      console.error('Error getting process info:', error);
+      return { error: error.message };
+    }
+  })
+  safeLog("Registered IPC handler: get-process-info");
+
+  ipcMain.handle('force-quit-app', async () => {
+    try {
+      console.log('Force quit requested via IPC');
+      // Remove the close event listener temporarily to allow actual quit
+      const mainWindow = deps.getMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.removeAllListeners('close');
+        mainWindow.close();
+      }
+      app.quit();
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error force quitting app:', error);
+      return { success: false, error: error.message };
+    }
+  })
+  safeLog("Registered IPC handler: force-quit-app");
+
   ipcMain.handle("set-service-account-credentials-from-file", async (_event, filePath: string) => {
     try {
       // Read the file content first

@@ -140,6 +140,7 @@ export class ProcessingHelper {
   private textBuffer: string[] = []
   private openaiClient: OpenAI | null = null
   private anthropicClient: Anthropic | null = null
+  private geminiApiKey: string | null = null
   // Speech service and related properties
   private googleSpeechService: GoogleSpeechService | null = null
   private transcriptionCache = new Map<string, { timestamp: number, text: string }>()
@@ -213,19 +214,17 @@ export class ProcessingHelper {
           safeLog("No API key available, OpenAI client not initialized");
         }
       } else if (config.apiProvider === "gemini"){
-        // Gemini client initialization
+        // Gemini client initialization - Note: Gemini uses REST API, not SDK client
         this.openaiClient = null;
         this.anthropicClient = null;
         if (config.apiKey) {
-          this.anthropicClient = new Anthropic({
-            apiKey: config.apiKey,
-            timeout: 30000, // 30 second timeout - reduced from 60s
-            maxRetries: 1   // Reduced retries from 2 to 1 for faster failure
-          });
+          // Store Gemini API key for direct REST API calls
+          this.geminiApiKey = config.apiKey;
           safeLog("Gemini API key set successfully");
         } else {
           this.openaiClient = null;
           this.anthropicClient = null;
+          this.geminiApiKey = null;
           safeLog("No API key available, Gemini client not initialized");
         }
       } else if (config.apiProvider === "anthropic") {
@@ -336,10 +335,10 @@ export class ProcessingHelper {
         );
         return;
       }
-    } else if (config.apiProvider === "gemini" && !this.anthropicClient) {
+    } else if (config.apiProvider === "gemini" && !this.geminiApiKey) {
       this.initializeAIClient();
       
-      if (!this.anthropicClient) {
+      if (!this.geminiApiKey) {
         safeError("Gemini API key not initialized");
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.API_KEY_INVALID
@@ -697,7 +696,7 @@ export class ProcessingHelper {
         }
       } else if (config.apiProvider === "gemini")  {
         // Use Gemini API
-        if (!this.anthropicClient) {
+        if (!this.geminiApiKey) {
           return {
             success: false,
             error: "Gemini API key not configured. Please check your settings."
@@ -706,7 +705,7 @@ export class ProcessingHelper {
 
         try {
           // Create Gemini message structure
-          const geminiMessages: GeminiMessage[] = [
+          const geminiMessages = [
             {
               role: "user",
               parts: [
@@ -722,15 +721,10 @@ export class ProcessingHelper {
               ]
             }
           ];
-
-          // Ensure anthropicClient is not null
-          if (!this.anthropicClient) {
-            throw new Error("Gemini API client not initialized");
-          }
           
-          // Make API request to Gemini
+          // Make API request to Gemini using the correct API key
           const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.extractionModel || "gemini-2.0-flash"}:generateContent?key=${this.anthropicClient.apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${config.extractionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
               generationConfig: {
@@ -1047,7 +1041,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
         responseContent = solutionResponse.choices[0].message.content;
       } else if (config.apiProvider === "gemini")  {
         // Gemini processing
-        if (!this.anthropicClient) {
+        if (!this.geminiApiKey) {
           return {
             success: false,
             error: "Gemini API key not configured. Please check your settings."
@@ -1081,14 +1075,9 @@ Your solution should be efficient, well-commented, and handle edge cases.
             }
           ];
 
-          // Ensure anthropicClient is not null
-          if (!this.anthropicClient) {
-            throw new Error("Gemini API client not initialized");
-          }
-          
-          // Make API request to Gemini
+          // Make API request to Gemini using correct API key
           const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.anthropicClient.apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
               generationConfig: {
@@ -1412,7 +1401,7 @@ DO NOT give generic responses. Analyze the ACTUAL error shown in the screenshot 
         });
         debugContent = debugResponse.choices[0].message.content;
       } else if (config.apiProvider === "gemini")  {
-        if (!this.anthropicClient) {
+        if (!this.geminiApiKey) {
           return {
             success: false,
             error: "Gemini API key not configured. Please check your settings."
@@ -1507,13 +1496,9 @@ DO NOT give generic responses. Analyze the ACTUAL error in the screenshot.` },
             });
           }
 
-          // Ensure anthropicClient is not null
-          if (!this.anthropicClient) {
-            throw new Error("Gemini API client not initialized");
-          }
-          
+          // Make API request to Gemini using correct API key
           const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.debuggingModel || "gemini-2.0-flash"}:generateContent?key=${this.anthropicClient.apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${config.debuggingModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
               generationConfig: {
@@ -1816,9 +1801,9 @@ DO NOT give generic responses. Analyze the ACTUAL error in the screenshot.`
         mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
         return { success: false, error: "OpenAI API key not configured or invalid." };
       }
-    } else if (config.apiProvider === "gemini" && !this.anthropicClient) {
+    } else if (config.apiProvider === "gemini" && !this.geminiApiKey) {
       this.initializeAIClient();
-      if (!this.anthropicClient) {
+      if (!this.geminiApiKey) {
         safeError("Gemini API key not initialized for simple query");
         mainWindow?.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
         return { success: false, error: "Gemini API key not configured or invalid." };
@@ -1861,13 +1846,8 @@ DO NOT give generic responses. Analyze the ACTUAL error in the screenshot.`
           { role: "user", parts: [{ text: `${finalSystemPrompt}\n\nUser Query: ${query}` }] }
         ];
 
-        // Make sure anthropicClient is not null before accessing
-        if (!this.anthropicClient) {
-          throw new Error("Gemini API client not initialized");
-        }
-
         const response = await axios.default.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelName || "gemini-2.0-flash"}:generateContent?key=${this.anthropicClient.apiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
           {
             contents: geminiMessages,
             generationConfig: {
@@ -2336,7 +2316,7 @@ Format your response as a concise, professional answer appropriate for a job int
           success: true, 
           data: completion.choices[0]?.message.content || '' 
         };
-      } else if (config.apiProvider === "gemini" && this.anthropicClient) {
+      } else if (config.apiProvider === "gemini" && this.geminiApiKey) {
         // Implementation for Gemini would go here
         return { success: false, error: "Gemini implementation pending" };
       } else if (config.apiProvider === "anthropic" && this.anthropicClient) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Dialog,
   DialogTrigger,
@@ -8,12 +8,38 @@ import {
   DialogTitle,
   DialogFooter,
 } from "../ui/dialog";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { cn } from "../../lib/utils";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
 import { GoogleSpeechService } from '../../services/googleSpeechService';
 import { GoogleSpeechSettings } from "../../components/GoogleSpeechSettings";
+
+// Custom dialog content without overlay
+const DialogContentNoOverlay = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
+>(({ className, children, ...props }, ref) => (
+  <DialogPrimitive.Portal>
+    <DialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "fixed z-[600] top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2",
+        "w-[90vw] max-w-md md:w-full",
+        "bg-white p-4 rounded-lg shadow-lg",
+        "focus:outline-none focus-visible:ring-0",
+        className
+      )}
+      style={{ maxHeight: '90vh', overflow: 'auto' }}
+      {...props}
+    >
+      {children}
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+));
+DialogContentNoOverlay.displayName = "DialogContentNoOverlay";
 
 type APIProvider = "openai" | "gemini" | "anthropic";
 
@@ -390,6 +416,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       setIsTestingGoogleKey(false);
     }
   };
+
   
   // Load speech service settings
   const loadSpeechSettings = async () => {
@@ -456,33 +483,35 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent 
-        className="sm:max-w-md bg-black border border-white/10 text-white settings-dialog"
+      <DialogContentNoOverlay 
+        className="sm:max-w-md bg-black border border-white/10 text-white settings-dialog custom-scrollbar"
         style={{
           position: 'fixed',
           top: '50%',
           left: '50%',
           transform: 'translate(-50%, -50%)',
-          width: 'min(450px, 90vw)',
+          width: 'min(480px, 95vw)',
           height: 'auto',
           minHeight: '400px',
-          maxHeight: '90vh',
+          maxHeight: '85vh',
           overflowY: 'auto',
           zIndex: 9999,
           margin: 0,
-          padding: '20px',
+          padding: '24px',
           transition: 'opacity 0.25s ease, transform 0.25s ease',
           animation: 'fadeIn 0.25s ease forwards',
-          opacity: 0.98
+          opacity: 0.98,
+          scrollbarWidth: 'none', /* Firefox */
+          msOverflowStyle: 'none' /* IE/Edge */
         }}
       >        
         <DialogHeader>
-          <DialogTitle>API Settings</DialogTitle>
+          <DialogTitle>Settings</DialogTitle>
           <DialogDescription className="text-white/70">
-            Configure your API key and model preferences. You'll need your own API key to use this application.
+            Configure API keys, model preferences, and speech settings for Interview Coder.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
+        <div className="space-y-3 py-3">
           {/* API Provider Selection */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-white">API Provider</label>
@@ -640,53 +669,36 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             </div>
           </div>
           
-          <div className="space-y-2 mt-4">
-            <label className="text-sm font-medium text-white mb-2 block">Keyboard Shortcuts</label>
-            <div className="bg-black/30 border border-white/10 rounded-lg p-3">
-              <div className="grid grid-cols-2 gap-y-2 text-xs">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-white">Keyboard Shortcuts</label>
+            <div className="bg-black/30 border border-white/10 rounded-lg p-2">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="text-white/70">Toggle Visibility</div>
-                <div className="text-white/90 font-mono">Ctrl+B / Cmd+B</div>
+                <div className="text-white/90 font-mono text-right">⌘B</div>
                 
                 <div className="text-white/70">Take Screenshot</div>
-                <div className="text-white/90 font-mono">Ctrl+H / Cmd+H</div>
+                <div className="text-white/90 font-mono text-right">⌘H</div>
                 
                 <div className="text-white/70">Process Screenshots</div>
-                <div className="text-white/90 font-mono">Ctrl+Enter / Cmd+Enter</div>
+                <div className="text-white/90 font-mono text-right">⌘⏎</div>
                 
-                <div className="text-white/70">Delete Last Screenshot</div>
-                <div className="text-white/90 font-mono">Ctrl+L / Cmd+L</div>
+                <div className="text-white/70">Delete Last</div>
+                <div className="text-white/90 font-mono text-right">⌘L</div>
                 
                 <div className="text-white/70">Reset View</div>
-                <div className="text-white/90 font-mono">Ctrl+R / Cmd+R</div>
+                <div className="text-white/90 font-mono text-right">⌘R</div>
                 
-                <div className="text-white/70">Quit Application</div>
-                <div className="text-white/90 font-mono">Ctrl+Q / Cmd+Q</div>
-                
-                <div className="text-white/70">Move Window</div>
-                <div className="text-white/90 font-mono">Ctrl+Arrow Keys</div>
-                
-                <div className="text-white/70">Decrease Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+[ / Cmd+[</div>
-                
-                <div className="text-white/70">Increase Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+] / Cmd+]</div>
-                
-                <div className="text-white/70">Zoom Out</div>
-                <div className="text-white/90 font-mono">Ctrl+- / Cmd+-</div>
-                
-                <div className="text-white/70">Reset Zoom</div>
-                <div className="text-white/90 font-mono">Ctrl+0 / Cmd+0</div>
-                
-                <div className="text-white/70">Zoom In</div>
-                <div className="text-white/90 font-mono">Ctrl+= / Cmd+=</div>
+                <div className="text-white/70">Quit App</div>
+                <div className="text-white/90 font-mono text-right">⌘Q</div>
               </div>
             </div>
           </div>
+
           
-          <div className="space-y-4 mt-4">
+          <div className="space-y-3">
             <label className="text-sm font-medium text-white">AI Model Selection</label>
-            <p className="text-xs text-white/60 -mt-3 mb-2">
-              Select which models to use for each stage of the process
+            <p className="text-xs text-white/60 -mt-2 mb-1">
+              Select models for each processing stage
             </p>
             
             {modelCategories.map((category) => {
@@ -697,13 +709,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 category.anthropicModels;
               
               return (
-                <div key={category.key} className="mb-4">
-                  <label className="text-sm font-medium text-white mb-1 block">
+                <div key={category.key} className="mb-2">
+                  <label className="text-xs font-medium text-white mb-1 block">
                     {category.title}
                   </label>
-                  <p className="text-xs text-white/60 mb-2">{category.description}</p>
+                  <p className="text-xs text-white/50 mb-1">{category.description}</p>
                   
-                  <div className="space-y-2">
+                  <div className="space-y-1">
                     {models.map((m) => {
                       // Determine which state to use based on category key
                       const currentValue = 
@@ -720,7 +732,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                       return (
                         <div
                           key={m.id}
-                          className={`p-2 rounded-lg cursor-pointer transition-colors ${
+                          className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
                             currentValue === m.id
                               ? "bg-white/10 border border-white/20"
                               : "bg-black/30 border border-white/5 hover:bg-white/5"
@@ -729,13 +741,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                         >
                           <div className="flex items-center gap-2">
                             <div
-                              className={`w-3 h-3 rounded-full ${
+                              className={`w-2 h-2 rounded-full ${
                                 currentValue === m.id ? "bg-white" : "bg-white/20"
                               }`}
                             />
-                            <div>
+                            <div className="flex-1">
                               <p className="font-medium text-white text-xs">{m.name}</p>
-                              <p className="text-xs text-white/60">{m.description}</p>
+                              <p className="text-xs text-white/50 leading-tight">{m.description}</p>
                             </div>
                           </div>
                         </div>
@@ -747,17 +759,17 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             })}
           </div>
         </div>
-        <div className="space-y-4 pt-4 border-t border-white/10">
-          <h3 className="text-lg font-medium text-white">Speech-to-Text Settings</h3>
+        <div className="space-y-3 pt-3 border-t border-white/10">
+          <h3 className="text-sm font-medium text-white">Speech-to-Text Settings</h3>
           
-          <div className="space-y-3">
+          <div className="space-y-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-white">
+              <label className="text-xs font-medium text-white">
                 Speech Service
               </label>
               <div className="flex gap-2">
                 <div
-                  className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${
+                  className={`flex-1 p-1.5 rounded-lg cursor-pointer transition-colors ${
                     speechService === "whisper"
                       ? "bg-white/10 border border-white/20"
                       : "bg-black/30 border border-white/5 hover:bg-white/5"
@@ -766,18 +778,18 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 >
                   <div className="flex items-center gap-2">
                     <div
-                      className={`w-3 h-3 rounded-full ${
+                      className={`w-2 h-2 rounded-full ${
                         speechService === "whisper" ? "bg-white" : "bg-white/20"
                       }`}
                     />
                     <div className="flex flex-col">
-                      <p className="font-medium text-white text-sm">OpenAI Whisper</p>
-                      <p className="text-xs text-white/60">Uses your OpenAI API key</p>
+                      <p className="font-medium text-white text-xs">OpenAI Whisper</p>
+                      <p className="text-xs text-white/50">Uses OpenAI key</p>
                     </div>
                   </div>
                 </div>
                 <div
-                  className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${
+                  className={`flex-1 p-1.5 rounded-lg cursor-pointer transition-colors ${
                     speechService === "google"
                       ? "bg-white/10 border border-white/20"
                       : "bg-black/30 border border-white/5 hover:bg-white/5"
@@ -786,13 +798,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 >
                   <div className="flex items-center gap-2">
                     <div
-                      className={`w-3 h-3 rounded-full ${
+                      className={`w-2 h-2 rounded-full ${
                         speechService === "google" ? "bg-white" : "bg-white/20"
                       }`}
                     />
                     <div className="flex flex-col">
-                      <p className="font-medium text-white text-sm">Google Speech</p>
-                      <p className="text-xs text-white/60">Requires separate API key</p>
+                      <p className="font-medium text-white text-xs">Google Speech</p>
+                      <p className="text-xs text-white/50">Separate API key</p>
                     </div>
                   </div>
                 </div>
@@ -813,28 +825,30 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           </div>
           
           {/* Speech section buttons */}
-          <div className="flex justify-end space-x-2 mt-4">
+          <div className="flex justify-end space-x-2 mt-2">
             {/* Test Google API Key button */}
             {speechService === 'google' && googleApiKey && (
               <Button
                 onClick={testGoogleSpeechApiKey}
-                className="px-4 py-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-xl font-medium"
+                className="px-3 py-1 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-lg font-medium text-xs"
                 disabled={isTestingGoogleKey || !googleApiKey}
               >
-                {isTestingGoogleKey ? "Testing..." : "Test Google API Key"}
+                {isTestingGoogleKey ? "Testing..." : "Test Key"}
               </Button>
             )}
             
             {/* Save Speech Settings button */}
             <Button
               onClick={handleSaveSpeechSettings}
-              className="px-4 py-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-xl font-medium"
+              className="px-3 py-1 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-lg font-medium text-xs"
               disabled={isLoading}
             >
-              Save Speech Settings
+              Save Speech
             </Button>
           </div>
         </div>
+
+
         <DialogFooter className="flex justify-between sm:justify-between">
           <Button
             onClick={() => handleOpenChange(false)}
@@ -850,7 +864,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             {isLoading ? "Saving..." : "Save Settings"}
           </Button>
         </DialogFooter>
-      </DialogContent>
+      </DialogContentNoOverlay>
     </Dialog>
   );
 }
