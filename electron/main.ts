@@ -240,6 +240,9 @@ const state = {
   view: "queue" as "queue" | "solutions" | "debug",
   problemInfo: null as any,
   hasDebugged: false,
+  
+  // Stealth mode state
+  originalArgv: null as string[] | null,
 
   // Processing events
   PROCESSING_EVENTS: {
@@ -618,7 +621,7 @@ async function createWindow(): Promise<void> {
   })
   state.mainWindow.setAlwaysOnTop(true, "screen-saver", 1)
 
-  // Additional screen capture resistance settings
+  // Enhanced stealth and screen capture resistance settings
   if (process.platform === "darwin") {
     // Prevent window from being captured in screenshots
     state.mainWindow.setHiddenInMissionControl(true)
@@ -628,8 +631,55 @@ async function createWindow(): Promise<void> {
     // Prevent window from being included in window switcher
     state.mainWindow.setSkipTaskbar(true)
 
-    // Disable window shadow
+    // Disable window shadow and visual effects
     state.mainWindow.setHasShadow(false)
+    state.mainWindow.setVibrancy(null)
+    
+    // Additional macOS stealth features
+    state.mainWindow.setTitle("")
+    // Set accessible title via property
+    state.mainWindow.accessibleTitle = ""
+    
+    // Prevent window from appearing in screen sharing applications
+    try {
+      state.mainWindow.setContentProtection(true)
+      // Additional content protection flags
+      state.mainWindow.webContents.setBackgroundThrottling(false)
+    } catch (error) {
+      safeLog("Could not set additional content protection:", error)
+    }
+  } else if (process.platform === "win32") {
+    // Windows-specific stealth features
+    state.mainWindow.setSkipTaskbar(true)
+    state.mainWindow.setTitle("")
+    
+    // Hide from Alt+Tab switcher
+    state.mainWindow.setAppDetails({
+      appId: "",
+      appIconPath: "",
+      appIconIndex: 0,
+      relaunchCommand: "",
+      relaunchDisplayName: ""
+    })
+    
+    // Additional Windows stealth
+    try {
+      // Hide from screen sharing applications
+      state.mainWindow.setContentProtection(true)
+    } catch (error) {
+      safeLog("Could not set Windows content protection:", error)
+    }
+  } else if (process.platform === "linux") {
+    // Linux-specific stealth features
+    state.mainWindow.setSkipTaskbar(true)
+    state.mainWindow.setTitle("")
+    
+    // Hide from window managers
+    try {
+      state.mainWindow.setContentProtection(true)
+    } catch (error) {
+      safeLog("Could not set Linux content protection:", error)
+    }
   }
 
   // Prevent the window from being captured by screen recording
@@ -639,6 +689,14 @@ async function createWindow(): Promise<void> {
   // Set up window listeners
   state.mainWindow.on("move", handleWindowMove)
   state.mainWindow.on("resize", handleWindowResize)
+  
+  // Intercept close event to hide instead of quit
+  state.mainWindow.on("close", (event) => {
+    safeLog("Window close event intercepted - hiding instead of quitting");
+    event.preventDefault(); // Prevent the window from actually closing
+    enableStealthMode(); // Hide the window using stealth mode
+  })
+  
   state.mainWindow.on("closed", handleWindowClosed)
 
   // Initialize window state
@@ -715,23 +773,8 @@ async function createWindow(): Promise<void> {
 
     // --- IPC handlers are now managed within SpeechBridge --- 
 
-    // Use state.mainWindow for the closed event
-    if (state.mainWindow) {
-      state.mainWindow.on('closed', () => {
-        state.mainWindow = null
-        state.isWindowVisible = false
-        state.windowPosition = null
-        state.windowSize = null
-
-        // Clean up services that might hold references or resources
-        appServices.googleSpeechService?.cleanup(); // Add cleanup method if needed
-        appServices.speechBridge?.cleanup(); // Add cleanup method if needed
-
-        console.log('Main window closed and cleaned up.');
-      });
-    } else {
-       console.warn('Could not attach closed handler: mainWindow is null after creation attempt.');
-    }
+    // Window closed handler is already set up above in the main window creation
+    // No need for duplicate handler here
 
   } catch (error) {
     safeError("Failed to initialize application services:", error)
@@ -753,10 +796,28 @@ function handleWindowResize(): void {
 }
 
 function handleWindowClosed(): void {
+  safeLog("Window actually closed - cleaning up application state");
+  
   state.mainWindow = null
   state.isWindowVisible = false
   state.windowPosition = null
   state.windowSize = null
+
+  // Clean up services that might hold references or resources
+  try {
+    if (appServices?.googleSpeechService) {
+      appServices.googleSpeechService.cleanup();
+      safeLog("GoogleSpeechService cleaned up");
+    }
+    if (appServices?.speechBridge) {
+      appServices.speechBridge.cleanup();
+      safeLog("SpeechBridge cleaned up");
+    }
+  } catch (error) {
+    safeError("Error during service cleanup:", error);
+  }
+
+  safeLog('Main window closed and cleaned up.');
 }
 
 // Window visibility functions
@@ -817,6 +878,141 @@ function showMainWindow(): void {
   }
 }
 
+function enableStealthMode(): void {
+  if (!state.mainWindow || state.mainWindow.isDestroyed()) {
+    return;
+  }
+  
+  safeLog('Enabling maximum stealth mode...');
+  
+  try {
+    // Hide from all possible detection methods
+    state.mainWindow.setOpacity(0);
+    state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
+    state.mainWindow.minimize();
+    
+    // Platform-specific stealth enhancements
+    if (process.platform === "darwin") {
+      // Enhanced macOS stealth
+      state.mainWindow.setHiddenInMissionControl(true);
+      state.mainWindow.setSkipTaskbar(true);
+      
+      // Hide dock icon completely
+      try {
+        app.dock.hide();
+        safeLog('Dock icon hidden');
+      } catch (error) {
+        safeLog('Could not hide dock icon:', error);
+      }
+      
+      // Additional macOS-specific hiding
+      state.mainWindow.setVisibleOnAllWorkspaces(false);
+      state.mainWindow.setAlwaysOnTop(false);
+      
+      // Try to mask bundle information
+      try {
+        // Change app name temporarily
+        app.setName("System Process");
+        safeLog('App name changed to System Process');
+      } catch (error) {
+        safeLog('Could not change app name:', error);
+      }
+      
+    } else if (process.platform === "win32") {
+      state.mainWindow.setSkipTaskbar(true);
+      // Move window off-screen as additional precaution
+      state.mainWindow.setPosition(-2000, -2000);
+    }
+    
+    // Enhanced process masking
+    process.title = "System Process";
+    
+    // Mask process arguments to hide executable path
+    try {
+      // Store original argv for restoration
+      if (!state.originalArgv) {
+        state.originalArgv = [...process.argv];
+      }
+      // Replace argv with generic system process arguments
+      process.argv = ['system', 'process'];
+      safeLog('Process arguments masked');
+    } catch (error) {
+      safeLog('Could not mask process arguments:', error);
+    }
+    
+    state.isWindowVisible = false;
+    safeLog('Maximum stealth mode enabled');
+  } catch (error) {
+    safeError('Error enabling stealth mode:', error);
+  }
+}
+
+function disableStealthMode(): void {
+  if (!state.mainWindow || state.mainWindow.isDestroyed()) {
+    return;
+  }
+  
+  safeLog('Disabling stealth mode...');
+  
+  try {
+    // Restore window visibility
+    if (state.windowPosition && state.windowSize) {
+      state.mainWindow.setBounds({
+        ...state.windowPosition,
+        ...state.windowSize
+      });
+    }
+    
+    state.mainWindow.setOpacity(1);
+    state.mainWindow.setIgnoreMouseEvents(false);
+    state.mainWindow.restore();
+    state.mainWindow.show();
+    
+    // Platform-specific restoration
+    if (process.platform === "darwin") {
+      // Restore dock icon
+      try {
+        app.dock.show();
+        safeLog('Dock icon restored');
+      } catch (error) {
+        safeLog('Could not restore dock icon:', error);
+      }
+      
+      // Restore app name
+      try {
+        app.setName("Interview Coder");
+        safeLog('App name restored to Interview Coder');
+      } catch (error) {
+        safeLog('Could not restore app name:', error);
+      }
+      
+      // Restore window properties
+      state.mainWindow.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true
+      });
+      state.mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
+    }
+    
+    // Restore process title
+    process.title = "Interview Coder";
+    
+    // Restore process arguments
+    try {
+      if (state.originalArgv) {
+        process.argv = [...state.originalArgv];
+        safeLog('Process arguments restored');
+      }
+    } catch (error) {
+      safeLog('Could not restore process arguments:', error);
+    }
+    
+    state.isWindowVisible = true;
+    safeLog('Stealth mode disabled');
+  } catch (error) {
+    safeError('Error disabling stealth mode:', error);
+  }
+}
+
 function toggleMainWindow(): void {
   safeLog(`Toggling window. Current state: ${state.isWindowVisible ? 'visible' : 'hidden'}, mainWindow exists: ${state.mainWindow ? 'yes' : 'no'}`);
   
@@ -833,36 +1029,11 @@ function toggleMainWindow(): void {
   try {
     // Direct toggle without using helper functions
   if (state.isWindowVisible) {
-      // Hide window
-      safeLog('Hiding window directly...');
-      
-      // Save current position and size
-      const bounds = state.mainWindow.getBounds();
-      state.windowPosition = { x: bounds.x, y: bounds.y };
-      state.windowSize = { width: bounds.width, height: bounds.height };
-      
-      // Hide the window
-      state.mainWindow.setOpacity(0);
-      state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
-      state.isWindowVisible = false;
+      // Hide window with stealth mode
+      enableStealthMode();
   } else {
       // Show window
-      safeLog('Showing window directly...');
-      
-      // Restore position and size if available
-      if (state.windowPosition && state.windowSize) {
-        state.mainWindow.setBounds({
-          ...state.windowPosition,
-          ...state.windowSize
-        });
-      }
-      
-      // Show the window
-      state.mainWindow.setOpacity(1);
-      state.mainWindow.setIgnoreMouseEvents(false);
-      state.mainWindow.show();
-      state.mainWindow.focus();
-      state.isWindowVisible = true;
+      disableStealthMode();
     }
   } catch (error) {
     safeError('Error toggling window:', error);

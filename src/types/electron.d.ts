@@ -70,6 +70,11 @@ export interface ElectronAPI {
   getGoogleSpeechApiKey: () => Promise<string | null>
   setGoogleSpeechApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   testGoogleSpeechApiKey: () => Promise<{ valid: boolean; error?: string }>
+  // Stealth mode methods
+  enableStealthMode: () => Promise<{ success: boolean; message?: string; error?: string }>
+  disableStealthMode: () => Promise<{ success: boolean; message?: string; error?: string }>
+  getProcessInfo: () => Promise<{ pid: number; title: string; platform: string; argv: string[]; version: string; error?: string }>
+  forceQuitApp: () => Promise<{ success: boolean; error?: string }>
   hasServiceAccountCredentials: () => Promise<boolean>
   setServiceAccountCredentialsFromFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
   setServiceAccountCredentialsFromText: (keyJsonText: string) => Promise<{ success: boolean; error?: string }>
