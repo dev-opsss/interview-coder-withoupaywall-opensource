@@ -48,6 +48,10 @@ const ipcRendererInvokeChannel: string[] = [
   'get-personality-prompt', 'get-personality',
   'dialog:openFile', 'dialog:saveFile', 'get-app-path', 'get-config-sync',
   'test-api-key', 'speech:getStatus',
+  // Multi-Monitor Support
+  'get-monitors', 'get-current-monitor', 'move-window-to-monitor', 'move-window-to-next-monitor',
+  'get-window-presets', 'apply-window-preset', 'create-window-preset', 'remove-window-preset',
+  'get-multi-monitor-settings', 'update-multi-monitor-settings',
    // Add any other invoke channels used
 ];
 

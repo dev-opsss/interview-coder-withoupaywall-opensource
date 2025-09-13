@@ -21,6 +21,8 @@ import * as fsPromises from 'fs/promises'; // Import fs.promises
 import pdf from 'pdf-parse'; // Import pdf-parse
 import mammoth from 'mammoth'; // Import mammoth
 import { GoogleSpeechService } from "./GoogleSpeechService"
+import { getMultiMonitorManager } from "./MultiMonitorManager"
+import { getMainWindowManager } from "./WindowManager"
 
 // --- Define and EXPORT AI Constants ---
 export const DEFAULT_PERSONALITY = 'Default';
@@ -1130,6 +1132,113 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
         success: false,
         error: error.message || 'Failed to generate suggestion for interviewer turn.',
       });
+    }
+  });
+
+  // --- Multi-Monitor Support Handlers ---
+  const multiMonitorManager = getMultiMonitorManager();
+  const windowManager = getMainWindowManager();
+
+  ipcMain.handle('get-monitors', async () => {
+    try {
+      return multiMonitorManager.getMonitors();
+    } catch (error: any) {
+      safeError('Error getting monitors:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('get-current-monitor', async () => {
+    try {
+      return windowManager.getCurrentMonitor();
+    } catch (error: any) {
+      safeError('Error getting current monitor:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('move-window-to-monitor', async (_event, monitorId: string, position?: string) => {
+    try {
+      const relativePosition = (position as any) || 'center';
+      const success = windowManager.moveToMonitor(monitorId, relativePosition);
+      return { success };
+    } catch (error: any) {
+      safeError('Error moving window to monitor:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('move-window-to-next-monitor', async () => {
+    try {
+      const success = windowManager.moveToNextMonitor();
+      return { success };
+    } catch (error: any) {
+      safeError('Error moving window to next monitor:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('get-window-presets', async () => {
+    try {
+      return multiMonitorManager.getPresets();
+    } catch (error: any) {
+      safeError('Error getting window presets:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('apply-window-preset', async (_event, presetId: string) => {
+    try {
+      const success = windowManager.applyPreset(presetId);
+      return { success };
+    } catch (error: any) {
+      safeError('Error applying window preset:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('create-window-preset', async (_event, name: string) => {
+    try {
+      const presetId = windowManager.createPresetFromCurrentPosition(name);
+      return { success: !!presetId, presetId };
+    } catch (error: any) {
+      safeError('Error creating window preset:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('remove-window-preset', async (_event, presetId: string) => {
+    try {
+      const success = multiMonitorManager.removePreset(presetId);
+      return { success };
+    } catch (error: any) {
+      safeError('Error removing window preset:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('get-multi-monitor-settings', async () => {
+    try {
+      return multiMonitorManager.getSettings();
+    } catch (error: any) {
+      safeError('Error getting multi-monitor settings:', error);
+      return {
+        preferredMonitor: null,
+        windowPresets: [],
+        autoSwitchMonitor: true,
+        rememberLastPosition: true,
+        adaptToMonitorChanges: true,
+      };
+    }
+  });
+
+  ipcMain.handle('update-multi-monitor-settings', async (_event, settings: any) => {
+    try {
+      multiMonitorManager.updateSettings(settings);
+      return { success: true };
+    } catch (error: any) {
+      safeError('Error updating multi-monitor settings:', error);
+      return { success: false, error: error.message };
     }
   });
 

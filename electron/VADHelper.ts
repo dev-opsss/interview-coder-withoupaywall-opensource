@@ -22,7 +22,9 @@ declare global {
     AudioContext: {
       new(): CustomAudioContext;
     };
-    webkitAudioContext: any;
+    webkitAudioContext?: {
+      new(): CustomAudioContext;
+    };
   }
   
   // Simplified media streams types for our needs

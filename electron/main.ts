@@ -56,6 +56,8 @@ import { autoUpdater } from "electron-updater"
 import { SpeechBridge } from './SpeechBridge';
 import { AudioCapture } from './AudioCapture';
 import { GoogleSpeechService } from './GoogleSpeechService';
+import { getMultiMonitorManager } from './MultiMonitorManager';
+import { getMainWindowManager } from './WindowManager';
 
 // Create a services object to store references to our services
 export const appServices = {
@@ -63,7 +65,9 @@ export const appServices = {
   audioCapture: null as AudioCapture | null,
   configHelper,
   googleSpeechService: null as GoogleSpeechService | null,
-  processingHelper: null as ProcessingHelper | null
+  processingHelper: null as ProcessingHelper | null,
+  multiMonitorManager: getMultiMonitorManager(),
+  windowManager: getMainWindowManager()
 };
 
 // Add a constant for dev server URL at the top of the file
@@ -420,6 +424,13 @@ async function createWindow(): Promise<void> {
 
   safeLog("Starting window creation process...")
 
+  // Initialize multi-monitor support
+  const windowManager = appServices.windowManager;
+  const multiMonitorManager = appServices.multiMonitorManager;
+  
+  // Get default position from WindowManager (handles multi-monitor)
+  const defaultPosition = windowManager.getDefaultPosition();
+  
   const primaryDisplay = screen.getPrimaryDisplay()
   const workArea = primaryDisplay.workAreaSize
   state.screenWidth = workArea.width
@@ -467,12 +478,12 @@ async function createWindow(): Promise<void> {
   safeLog("Configured session with COOP and COEP:credentialless headers for cross-origin isolation");
 
   const windowSettings: Electron.BrowserWindowConstructorOptions = {
-    width: 800,
-    height: 600,
+    width: defaultPosition.width,
+    height: defaultPosition.height,
     minWidth: 750,
     minHeight: 550,
-    x: state.currentX,
-    y: 50,
+    x: defaultPosition.x,
+    y: defaultPosition.y,
     alwaysOnTop: true,
     webPreferences: {
       nodeIntegration: false,
@@ -498,6 +509,16 @@ async function createWindow(): Promise<void> {
   }
 
   state.mainWindow = new BrowserWindow(windowSettings)
+
+  // Set up window manager
+  windowManager.setWindow(state.mainWindow);
+  
+  // Try to restore previous window state
+  const savedState = windowManager.restoreWindowState();
+  if (savedState) {
+    windowManager.applyWindowState(savedState);
+    safeLog("Restored window state from previous session");
+  }
 
   // Additional configuration to allow SharedArrayBuffer
   state.mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {

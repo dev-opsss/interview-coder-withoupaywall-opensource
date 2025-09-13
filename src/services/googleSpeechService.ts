@@ -1,6 +1,8 @@
 // Proxy class for Google Speech Service that communicates with the main process
 // This file is used in the renderer process and does not import Node.js modules directly
 
+/// <reference path="../types/electron.d.ts" />
+
 export interface SpeechRecognitionOptions {
   encoding?: string;
   sampleRateHertz?: number;
@@ -128,9 +130,9 @@ export class GoogleSpeechService {
     this.onTranscriptCallback = callback;
     
     // Register for transcription events
-    const unsubscribe = window.electronAPI.onTranscriptionReceived((text: string) => {
+    const unsubscribe = window.electronAPI.onTranscriptionReceived((data: { transcript: string; isFinal: boolean; speaker: 'user' | 'interviewer'; words?: { word: string; startTime: number; endTime: number; }[] }) => {
       if (this.onTranscriptCallback) {
-        this.onTranscriptCallback(text, true);
+        this.onTranscriptCallback(data.transcript, data.isFinal);
       }
     });
 

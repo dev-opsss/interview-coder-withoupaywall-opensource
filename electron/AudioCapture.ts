@@ -36,7 +36,8 @@ export class AudioCapture {
         const buffer = Buffer.from(audioData);
         
         // Send to speech service via bridge
-        this.speechBridge.processAudioChunk(buffer);
+        // Default to 'user' role for audio captured from microphone
+        this.speechBridge.processAudioChunk(buffer, 'user');
       } catch (error) {
         console.error('Error processing audio data:', error);
       }

@@ -16,6 +16,7 @@ import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
 import { GoogleSpeechService } from '../../services/googleSpeechService';
 import { GoogleSpeechSettings } from "../../components/GoogleSpeechSettings";
+import MultiMonitorSettings from "./MultiMonitorSettings";
 
 // Custom dialog content without overlay
 const DialogContentNoOverlay = React.forwardRef<
@@ -848,6 +849,16 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           </div>
         </div>
 
+        {/* Multi-Monitor Settings Section */}
+        <div className="space-y-3 py-3 border-t border-white/10">
+          <div className="flex items-center gap-2">
+            <Settings className="w-4 h-4 text-white" />
+            <label className="text-sm font-medium text-white">Multi-Monitor Support</label>
+          </div>
+          <div className="bg-black/30 rounded-lg p-3">
+            <MultiMonitorSettings className="text-white" />
+          </div>
+        </div>
 
         <DialogFooter className="flex justify-between sm:justify-between">
           <Button
