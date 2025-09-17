@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Settings, LogOut, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useToast } from '../../contexts/toast';
+import { PROGRAMMING_LANGUAGES } from '../../constants/languages';
 
 interface HeaderProps {
   currentLanguage: string;
@@ -9,17 +10,8 @@ interface HeaderProps {
   onOpenSettings: () => void;
 }
 
-// Available programming languages
-const LANGUAGES = [
-  { value: 'python', label: 'Python' },
-  { value: 'javascript', label: 'JavaScript' },
-  { value: 'java', label: 'Java' },
-  { value: 'cpp', label: 'C++' },
-  { value: 'csharp', label: 'C#' },
-  { value: 'go', label: 'Go' },
-  { value: 'rust', label: 'Rust' },
-  { value: 'typescript', label: 'TypeScript' },
-];
+// Use shared programming languages
+const LANGUAGES = PROGRAMMING_LANGUAGES;
 
 export function Header({ currentLanguage, setLanguage, onOpenSettings }: HeaderProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -53,7 +45,7 @@ export function Header({ currentLanguage, setLanguage, onOpenSettings }: HeaderP
     // Also save the language preference to config
     window.electronAPI.updateConfig({
       language: lang
-    }).catch(error => {
+    }).catch((error: unknown) => {
       console.error('Failed to save language preference:', error);
     });
   };
@@ -83,17 +75,25 @@ export function Header({ currentLanguage, setLanguage, onOpenSettings }: HeaderP
           </button>
           
           {dropdownOpen && (
-            <div className="absolute z-10 mt-1 w-full rounded-md bg-black border border-white/10 shadow-lg">
+            <div 
+              className="absolute z-10 mt-1 w-full rounded-md bg-black border border-white/10 shadow-lg screenshare-hidden"
+              data-screenshare-ignore="true"
+              data-capture-ignore="true"
+              data-no-capture="true"
+            >
               <div className="py-1">
                 {LANGUAGES.map((lang) => (
                   <button
                     key={lang.value}
                     onClick={() => handleLanguageSelect(lang.value)}
-                    className={`block w-full text-left px-4 py-2 text-sm ${
+                    className={`block w-full text-left px-4 py-2 text-sm screenshare-hidden ${
                       currentLanguage === lang.value
                         ? 'bg-white/10 text-white'
                         : 'text-white/70 hover:bg-white/5'
                     }`}
+                    data-screenshare-ignore="true"
+                    data-capture-ignore="true"
+                    data-no-capture="true"
                   >
                     {lang.label}
                   </button>

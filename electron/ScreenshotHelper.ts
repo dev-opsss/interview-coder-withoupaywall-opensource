@@ -51,8 +51,8 @@ export class ScreenshotHelper {
     }
     if (!fs.existsSync(this.extraScreenshotDir)) {
       fs.mkdirSync(this.extraScreenshotDir, { recursive: true })
-          }
-        }
+    }
+  }
 
   public static getInstance(initialView?: "queue" | "solutions" | "debug"): ScreenshotHelper {
     if (!ScreenshotHelper.instance) {
@@ -108,7 +108,7 @@ export class ScreenshotHelper {
       // Save the screenshot based on current view
       if (this.view === "queue") {
         screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
-        fs.writeFileSync(screenshotPath, resizedThumbnail.toPNG())
+        fs.writeFileSync(screenshotPath, resizedThumbnail.toPNG() as any)
         console.log("Adding screenshot to main queue:", screenshotPath)
         this.screenshotQueue.push(screenshotPath)
         if (this.screenshotQueue.length > this.MAX_SCREENSHOTS) {
@@ -128,7 +128,7 @@ export class ScreenshotHelper {
       } else {
         // In solutions view, only add to extra queue
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
-        fs.writeFileSync(screenshotPath, resizedThumbnail.toPNG())
+        fs.writeFileSync(screenshotPath, resizedThumbnail.toPNG() as any)
         console.log("Adding screenshot to extra queue:", screenshotPath)
         this.extraScreenshotQueue.push(screenshotPath)
         if (this.extraScreenshotQueue.length > this.MAX_SCREENSHOTS) {
@@ -206,7 +206,8 @@ export class ScreenshotHelper {
   public async getImagePreview(filepath: string): Promise<string> {
     try {
       if (!fs.existsSync(filepath)) {
-        throw new Error(`File not found: ${filepath}`);
+        console.warn(`Preview requested for non-existent file: ${filepath}`);
+        return "";
       }
       
       // Simple implementation: return the file path
@@ -219,11 +220,12 @@ export class ScreenshotHelper {
   }
 
   /**
-   * Clear both screenshot queues
+   * Clear both screenshot queues (memory only, keep files on disk)
    */
   public clearQueues(): void {
-    this.clearAllScreenshots();
-    this.clearExtraScreenshotQueue();
+    console.log("Clearing screenshot queues from memory (keeping files on disk)");
+    this.screenshotQueue = [];
+    this.extraScreenshotQueue = [];
   }
 
   public async clearAllScreenshots(): Promise<void> {
@@ -290,4 +292,5 @@ export class ScreenshotHelper {
     })
     this.extraScreenshotQueue = []
   }
+
 }

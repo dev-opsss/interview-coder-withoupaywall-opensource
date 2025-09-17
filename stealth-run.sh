@@ -4,11 +4,14 @@ echo
 echo "IMPORTANT: This app is designed to be INVISIBLE by default!"
 echo "Use the keyboard shortcuts to control it:"
 echo
+echo "STEALTH MODE CONTROLS:"
 echo "- Toggle Visibility: Cmd+B"
+echo "- Adjust Opacity: Cmd+[ (decrease) / Cmd+] (increase)"
+echo
+echo "GENERAL CONTROLS:"
 echo "- Take Screenshot: Cmd+H"
 echo "- Process Screenshots: Cmd+Enter"
 echo "- Move Window: Cmd+Arrows (Left/Right/Up/Down)"
-echo "- Adjust Opacity: Cmd+[ (decrease) / Cmd+] (increase)"
 echo "- Reset View: Cmd+R"
 echo "- Quit App: Cmd+Q"
 echo

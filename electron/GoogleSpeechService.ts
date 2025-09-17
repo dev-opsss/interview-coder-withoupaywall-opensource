@@ -6,6 +6,8 @@ import crypto from 'crypto';
 import { configHelper } from './ConfigHelper';
 import { ipcMain, WebContents } from 'electron';
 import { PassThrough } from 'stream';
+import { TranscriptLogger } from './TranscriptLogger';
+import { log } from './logger';
 
 // Type definitions to improve code clarity
 export interface SpeechRecognitionOptions {
@@ -79,6 +81,10 @@ export class GoogleSpeechService {
   private streamReadyForData: boolean = false;
   private audioInputStream: PassThrough | null = null;
   private targetWebContents: WebContents | null = null;
+  // Static logger to allow external control via IPC without deep wiring
+  public static transcriptLogger: TranscriptLogger | null = null;
+  // Track the most recent speaker role inferred from incoming audio frames
+  private currentSpeakerRole: 'user' | 'interviewer' = 'interviewer';
 
   // Rate limiting implementation
   private tokenBucket: TokenBucket = {
@@ -150,7 +156,7 @@ export class GoogleSpeechService {
       // Finally, try environment variables
       this.tryEnvironmentCredentials();
     } catch (error) {
-      console.error('Failed to load credentials from config:', error);
+      log.auth.error('Failed to load credentials from config:', error);
       this.tryEnvironmentCredentials();
     }
   }
@@ -167,17 +173,17 @@ export class GoogleSpeechService {
         // It's a service account JSON string
         const credentials = JSON.parse(apiKeyOrCredentials);
         this.client = new SpeechClient({ credentials });
-        console.log('Initialized Google Speech client with service account credentials');
+        log.auth.info('Initialized Google Speech client with service account credentials');
       } else if (apiKeyOrCredentials.includes('.json')) {
         // It's a path to a credentials file
         this.credentialsPath = apiKeyOrCredentials;
         this.client = new SpeechClient({ keyFilename: apiKeyOrCredentials });
-        console.log(`Initialized Google Speech client with credentials file: ${apiKeyOrCredentials}`);
+        log.auth.info('Initialized Google Speech client with credentials file');
       } else {
         // Assume it's an API key
         this.apiKey = apiKeyOrCredentials;
         this.client = new SpeechClient({ key: apiKeyOrCredentials });
-        console.log('Initialized Google Speech client with API key');
+        log.auth.info('Initialized Google Speech client with API key');
       }
     } catch (error) {
       console.error('Failed to initialize Google Speech client:', error);
@@ -276,11 +282,11 @@ export class GoogleSpeechService {
       
       if (error.code === 16 || error.code === 'UNAUTHENTICATED' || 
           error.message?.includes('API key')) {
-        console.error('API key validation failed:', error.message);
+        log.auth.error('API key validation failed:', error.message);
           return false;
         }
       
-      console.error('Unexpected error testing API key:', error);
+      log.auth.error('Unexpected error testing API key:', error);
       return false;
     }
   }
@@ -299,8 +305,8 @@ export class GoogleSpeechService {
     console.log('Transcription request received. Credential state:');
     console.log('- Client initialized:', !!this.client);
     console.log('- API Key present:', !!this.apiKey);
-    console.log('- Credentials path:', this.credentialsPath || 'none');
-    console.log('- Service account in use:', this.client && !this.apiKey && (!!this.credentialsPath || process.env.GOOGLE_APPLICATION_CREDENTIALS));
+    log.auth.debug('- Credentials path configured:', !!this.credentialsPath);
+    log.auth.debug('- Service account in use:', this.client && !this.apiKey && (!!this.credentialsPath || process.env.GOOGLE_APPLICATION_CREDENTIALS));
     console.log('- Environment variables:', {
       GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS || 'not set',
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY ? 'set (hidden)' : 'not set'
@@ -447,7 +453,7 @@ export class GoogleSpeechService {
         config: {
           encoding: 'LINEAR16' as const,
           sampleRateHertz: 16000, // Or determine dynamically if needed
-          languageCode: 'en-US', // <-- CORRECT: Use the effective language for the stream
+          languageCode: currentLanguage, // Use effective language
           enableWordTimeOffsets: true,
           enableAutomaticPunctuation: true,
           useEnhanced: true,
@@ -881,7 +887,7 @@ export class GoogleSpeechService {
       // Initialize client with credentials
       this.initializeClient(serviceAccountJson);
     } catch (error) {
-      console.error('Failed to set service account credentials:', error);
+      log.auth.error('Failed to set service account credentials:', error);
       throw new Error('Failed to set service account credentials');
     }
   }
@@ -910,7 +916,7 @@ export class GoogleSpeechService {
       // Set environment variable to help Google libraries find the credentials
       if (shouldStore) {
         // Store credentials securely using ConfigHelper
-        console.log(`Storing service account credentials via ConfigHelper`);
+        log.auth.info('Storing service account credentials via ConfigHelper');
         configHelper.storeServiceAccountKey(serviceAccountJson);
         
         // For additional reliability, also set the environment variable
@@ -945,12 +951,16 @@ export class GoogleSpeechService {
   private handleAudioData = (event: Electron.IpcMainEvent, audioData: any): void => {
     console.log(`---> GSS handleAudioData: Received raw audioData via IPC. Type: ${typeof audioData}, Is ArrayBuffer: ${audioData instanceof ArrayBuffer}, Is Buffer: ${Buffer.isBuffer(audioData)}`); // DEBUG
     if (audioData && typeof audioData === 'object' && !(audioData instanceof ArrayBuffer) && !Buffer.isBuffer(audioData)) {
-      console.log(`---> GSS handleAudioData: audioData keys: ${Object.keys(audioData).join(', ')}`); // DEBUG if it's an unexpected object
+      log.speech.debug('GSS handleAudioData: audioData keys:', Object.keys(audioData)); // DEBUG if it's an unexpected object
       if (audioData.data && Array.isArray(audioData.data) && audioData.type === 'Buffer') {
         console.log(`---> GSS handleAudioData: Object looks like a serialized Buffer. data.length: ${audioData.data.length}`); // DEBUG
       }
       // Handle object with audio property (from VoiceTranscriptionPanel)
       if (audioData.audio) {
+        // Capture speaker role if provided
+        if (typeof audioData.role === 'string' && (audioData.role === 'user' || audioData.role === 'interviewer')) {
+          this.currentSpeakerRole = audioData.role;
+        }
         console.log(`---> GSS handleAudioData: Found audio property in object, extracting...`); // DEBUG
         audioData = audioData.audio; // Extract the audio data
       }
@@ -1026,12 +1036,25 @@ export class GoogleSpeechService {
 
   private sendTranscriptionUpdate(transcript: string, isFinal: boolean): void {
     if (this.targetWebContents && !this.targetWebContents.isDestroyed()) {
-      // TEMPORARY: Send a hardcoded speaker to enable testing of downstream logic
-      // TODO: Implement proper speaker detection/propagation
-      const speaker = 'interviewer'; // Or toggle/manage this for more advanced testing
-      const data = { transcript, isFinal, speaker }; 
+      // Attach the most recent speaker role inferred from incoming audio frames
+      const speaker: 'user' | 'interviewer' = this.currentSpeakerRole;
+      const data = { transcript, isFinal, speaker };
       // console.log(`---> GSS: Sending speech:transcript-update to renderer: ${JSON.stringify(data)}`); // Keep this commented for now
       this.targetWebContents.send('speech:transcript-update', data);
+      // Log to file if logger is active and this is a final entry
+      try {
+        if (isFinal && GoogleSpeechService.transcriptLogger) {
+          GoogleSpeechService.transcriptLogger.logEntry({
+            speaker,
+            text: transcript,
+            timestamp: Date.now(),
+            isFinal
+          });
+        }
+      } catch (e) {
+        // Swallow logging errors to avoid disrupting UI
+        console.warn('Transcript logging error:', (e as any)?.message || e);
+      }
     } else {
       // console.warn('GSS: Target webContents not available or destroyed for sending transcript update.'); // DEBUG
     }

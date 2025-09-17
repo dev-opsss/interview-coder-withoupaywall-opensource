@@ -13,6 +13,10 @@ interface SubscribedAppProps {
   onToggleLiveAssistant: () => void
   isLiveAssistantActive: boolean
   isChatPanelOpen: boolean
+  // AI Provider props
+  chatCurrentProvider?: 'openai' | 'gemini' | 'anthropic'
+  chatApiConnected?: boolean
+  onChatProviderChange?: (provider: 'openai' | 'gemini' | 'anthropic') => void
 }
 
 const SubscribedApp: React.FC<SubscribedAppProps> = ({
@@ -22,7 +26,10 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
   onToggleChat,
   onToggleLiveAssistant,
   isLiveAssistantActive,
-  isChatPanelOpen
+  isChatPanelOpen,
+  chatCurrentProvider,
+  chatApiConnected,
+  onChatProviderChange
 }) => {
   const queryClient = useQueryClient()
   const [view, setView] = useState<"queue" | "solutions" | "debug">("queue")
@@ -157,6 +164,9 @@ const SubscribedApp: React.FC<SubscribedAppProps> = ({
           isLiveAssistantActive={isLiveAssistantActive}
           onToggleChat={onToggleChat}
           isChatPanelOpen={isChatPanelOpen}
+          chatCurrentProvider={chatCurrentProvider}
+          chatApiConnected={chatApiConnected}
+          onChatProviderChange={onChatProviderChange}
         />
       ) : view === "solutions" ? (
         <Solutions

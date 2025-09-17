@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import MonitorSelector from '../../../src/components/MultiMonitor/MonitorSelector';
 import { mockElectronAPI } from '../../setup';
 
@@ -84,9 +84,12 @@ describe('MonitorSelector', () => {
     });
 
     const dropdownButton = screen.getByRole('button', { name: /select monitor/i });
-    fireEvent.click(dropdownButton);
+    await act(async () => {
+      fireEvent.click(dropdownButton);
+    });
 
-    expect(screen.getByText('External Monitor 1 - 2560×1440')).toBeInTheDocument();
+    expect(screen.getByText('External Monitor 1')).toBeInTheDocument();
+    expect(screen.getByText('2560×1440')).toBeInTheDocument();
   });
 
   test('should call onMonitorSelect when monitor is selected', async () => {
@@ -98,11 +101,20 @@ describe('MonitorSelector', () => {
 
     // Open dropdown
     const dropdownButton = screen.getByRole('button', { name: /select monitor/i });
-    fireEvent.click(dropdownButton);
+    await act(async () => {
+      fireEvent.click(dropdownButton);
+    });
 
-    // Select second monitor
-    const monitor2Option = screen.getByText('External Monitor 1 - 2560×1440');
-    fireEvent.click(monitor2Option);
+    // Select second monitor by finding the option button containing 'External Monitor 1'
+    const monitor2Options = screen.getAllByRole('option');
+    const monitor2Option = monitor2Options.find(option => 
+      option.textContent?.includes('External Monitor 1')
+    );
+    expect(monitor2Option).toBeTruthy();
+    
+    await act(async () => {
+      fireEvent.click(monitor2Option!);
+    });
 
     expect(mockOnMonitorSelect).toHaveBeenCalledWith('monitor-2', 'center');
   });
@@ -116,18 +128,22 @@ describe('MonitorSelector', () => {
 
     // Open dropdown
     const dropdownButton = screen.getByRole('button', { name: /select monitor/i });
-    fireEvent.click(dropdownButton);
+    await act(async () => {
+      fireEvent.click(dropdownButton);
+    });
 
-    expect(screen.getByText('External Monitor 1 - 2560×1440')).toBeInTheDocument();
+    expect(screen.getByText('External Monitor 1')).toBeInTheDocument();
 
     // Click backdrop
     const backdrop = document.querySelector('.fixed.inset-0');
     if (backdrop) {
-      fireEvent.click(backdrop);
+      await act(async () => {
+        fireEvent.click(backdrop);
+      });
     }
 
     await waitFor(() => {
-      expect(screen.queryByText('External Monitor 1 - 2560×1440')).not.toBeInTheDocument();
+      expect(screen.queryByText('External Monitor 1')).not.toBeInTheDocument();
     });
   });
 
@@ -166,6 +182,10 @@ describe('MonitorSelector', () => {
         ...mockMonitors[0],
         scaleFactor: 2,
       },
+      {
+        ...mockMonitors[1],
+        scaleFactor: 1.5,
+      },
     ];
 
     mockElectronAPI.invoke.mockImplementation((channel: string) => {
@@ -187,9 +207,12 @@ describe('MonitorSelector', () => {
 
     // Open dropdown
     const dropdownButton = screen.getByRole('button', { name: /select monitor/i });
-    fireEvent.click(dropdownButton);
+    await act(async () => {
+      fireEvent.click(dropdownButton);
+    });
 
     expect(screen.getByText('1920×1080 @ 200%')).toBeInTheDocument();
+    expect(screen.getByText('2560×1440 @ 150%')).toBeInTheDocument();
   });
 
   test('should highlight current monitor', async () => {
@@ -239,13 +262,17 @@ describe('MonitorSelector', () => {
     const dropdownButton = screen.getByRole('button', { name: /select monitor/i });
     
     // Test Enter key to open dropdown
-    fireEvent.keyDown(dropdownButton, { key: 'Enter' });
-    expect(screen.getByText('External Monitor 1 - 2560×1440')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.keyDown(dropdownButton, { key: 'Enter' });
+    });
+    expect(screen.getByText('External Monitor 1')).toBeInTheDocument();
 
     // Test Escape key to close dropdown
-    fireEvent.keyDown(dropdownButton, { key: 'Escape' });
+    await act(async () => {
+      fireEvent.keyDown(dropdownButton, { key: 'Escape' });
+    });
     await waitFor(() => {
-      expect(screen.queryByText('External Monitor 1 - 2560×1440')).not.toBeInTheDocument();
+      expect(screen.queryByText('External Monitor 1')).not.toBeInTheDocument();
     });
   });
 

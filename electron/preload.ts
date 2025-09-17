@@ -43,6 +43,8 @@ const ipcRendererInvokeChannel: string[] = [
   'set-service-account-credentials-from-file', 
   'set-service-account-credentials-from-text', // Added
   'clear-service-account-credentials',
+  // Stealth mode handlers
+  'enable-stealth-mode', 'disable-stealth-mode', 'get-stealth-mode-status', 'get-process-info', 'force-quit-app',
   'extract-resume-text', 'transcribe-audio', 'generate-response-suggestion',
   'get-audio-device-settings', 'save-audio-device-settings',
   'get-personality-prompt', 'get-personality',
@@ -52,7 +54,11 @@ const ipcRendererInvokeChannel: string[] = [
   'get-monitors', 'get-current-monitor', 'move-window-to-monitor', 'move-window-to-next-monitor',
   'get-window-presets', 'apply-window-preset', 'create-window-preset', 'remove-window-preset',
   'get-multi-monitor-settings', 'update-multi-monitor-settings',
-   // Add any other invoke channels used
+  // Transcript logging
+  'transcript:start-log', 'transcript:stop-log',
+  // Logging configuration
+  'get-logging-config', 'set-logging-config',
+    // Add any other invoke channels used
 ];
 
 const ipcRendererOnChannel: string[] = [
@@ -64,7 +70,7 @@ const ipcRendererOnChannel: string[] = [
   'show-settings-dialog', 'api-key-invalid', 'delete-last-screenshot',
   'toggle-voice-input', 'show-input-overlay', 'close-input-overlay',
   'restore-focus', 'audio-capture-error', 'audio-capture-status',
-  'auto-response-update',
+  'auto-response-update', 'stealth-mode-changed',
   // Speech specific listeners
   // 'speech:transcription', // Kept for potential other uses?
   // 'speech:error',         // Kept for potential other uses?
@@ -216,6 +222,11 @@ const electronAPI = {
   // Stealth mode methods
   enableStealthMode: () => ipcRenderer.invoke('enable-stealth-mode'),
   disableStealthMode: () => ipcRenderer.invoke('disable-stealth-mode'),
+  getStealthModeStatus: () => ipcRenderer.invoke('get-stealth-mode-status'),
+  onStealthModeChanged: (callback: (isEnabled: boolean) => void) => {
+    ipcRenderer.on('stealth-mode-changed', (_, isEnabled: boolean) => callback(isEnabled));
+    return () => ipcRenderer.removeAllListeners('stealth-mode-changed');
+  },
   getProcessInfo: () => ipcRenderer.invoke('get-process-info'),
   forceQuitApp: () => ipcRenderer.invoke('force-quit-app'),
   hasServiceAccountCredentials: () => ipcRenderer.invoke('has-service-account-credentials'),

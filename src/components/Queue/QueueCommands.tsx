@@ -4,7 +4,9 @@ import { createRoot } from "react-dom/client"
 import { useToast } from "../../contexts/toast"
 import { LanguageSelector } from "../shared/LanguageSelector"
 import { COMMAND_KEY } from "../../utils/platform"
+import { PROGRAMMING_LANGUAGES } from "../../constants/languages"
 import AIChatButton from "./AIChatButton"
+import AIProviderSelector from "./AIProviderSelector"
 
 interface QueueCommandsProps {
   onTooltipVisibilityChange: (visible: boolean, height: number) => void
@@ -16,6 +18,10 @@ interface QueueCommandsProps {
   onToggleLiveAssistant?: () => void
   isLiveAssistantActive?: boolean
   isChatPanelOpen?: boolean
+  // AI Provider props
+  chatCurrentProvider?: 'openai' | 'gemini' | 'anthropic'
+  chatApiConnected?: boolean
+  onChatProviderChange?: (provider: 'openai' | 'gemini' | 'anthropic') => void
 }
 
 const QueueCommands: React.FC<QueueCommandsProps> = ({
@@ -27,7 +33,10 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   onToggleChat = () => {},
   onToggleLiveAssistant = () => {},
   isLiveAssistantActive = false,
-  isChatPanelOpen = false
+  isChatPanelOpen = false,
+  chatCurrentProvider = 'openai',
+  chatApiConnected = false,
+  onChatProviderChange = () => {}
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -43,12 +52,35 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       try {
         const info = await window.electronAPI.getProcessInfo()
         setProcessInfo(info)
-        // You could also check if stealth mode is currently active here
+        
+        // Load actual stealth mode status
+        const stealthStatus = await window.electronAPI.getStealthModeStatus()
+        if (stealthStatus && !stealthStatus.error) {
+          setStealthMode(stealthStatus.isEnabled)
+        }
       } catch (error) {
-        console.error('Failed to load process info:', error)
+        console.error('Failed to load process info or stealth state:', error)
       }
     }
     loadStealthState()
+  }, [])
+
+  // Listen for stealth mode changes from main process
+  useEffect(() => {
+    const handleStealthModeChanged = (isEnabled: boolean) => {
+      setStealthMode(isEnabled)
+    }
+
+    // Set up the event listener
+    if (window.electronAPI && window.electronAPI.onStealthModeChanged) {
+      const unsubscribe = window.electronAPI.onStealthModeChanged(handleStealthModeChanged)
+      
+      return () => {
+        if (unsubscribe) {
+          unsubscribe()
+        }
+      }
+    }
   }, [])
 
   // Handle AI Chat toggle
@@ -176,10 +208,10 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   return (
     <div>
       <div className="pt-2 w-fit">
-        <div className="text-xs text-white/90 backdrop-blur-md bg-black/60 rounded-lg py-2 px-4 flex items-center justify-center gap-4">
+        <div className="text-xs text-white/90 backdrop-blur-md bg-black/60 rounded-lg py-1.5 px-2.5 flex items-center justify-center gap-2">
           {/* Screenshot */}
           <div
-            className="flex items-center gap-2 cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors"
+            className="flex items-center gap-1.5 cursor-pointer rounded px-1.5 py-1 hover:bg-white/10 transition-colors"
             onClick={async () => {
               try {
                 const result = await window.electronAPI.triggerScreenshot()
@@ -193,24 +225,24 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
               }
             }}
           >
-            <span className="text-[11px] leading-none truncate">
+            <span className="text-[10px] leading-none truncate">
               {screenshotCount === 0
-                ? "Take first screenshot"
+                ? "Screenshot"
                 : screenshotCount === 1
-                ? "Take second screenshot"
+                ? "Screenshot 2"
                 : screenshotCount === 2
-                ? "Take third screenshot"
+                ? "Screenshot 3"
                 : screenshotCount === 3
-                ? "Take fourth screenshot"
+                ? "Screenshot 4"
                 : screenshotCount === 4
-                ? "Take fifth screenshot"
-                : "Next will replace first screenshot"}
+                ? "Screenshot 5"
+                : "Replace first"}
             </span>
-            <div className="flex gap-1">
-              <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
+            <div className="flex gap-0.5">
+              <button className="bg-white/10 rounded px-1 py-0.5 text-[9px] leading-none text-white/70">
                 {COMMAND_KEY}
               </button>
-              <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
+              <button className="bg-white/10 rounded px-1 py-0.5 text-[9px] leading-none text-white/70">
                 H
               </button>
             </div>
@@ -219,7 +251,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           {/* Solve Command */}
           {screenshotCount > 0 && (
             <div
-              className={`flex flex-col cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors ${
+              className={`flex items-center cursor-pointer rounded px-1.5 py-1 hover:bg-white/10 transition-colors ${
                 credits <= 0 ? "opacity-50 cursor-not-allowed" : ""
               }`}
               onClick={async () => {
@@ -240,29 +272,34 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                 }
               }}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] leading-none">Solve </span>
-                <div className="flex gap-1 ml-2">
-                  <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
-                    {COMMAND_KEY}
-                  </button>
-                  <button className="bg-white/10 rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
-                    ↵
-                  </button>
-                </div>
+              <span className="text-[10px] leading-none">Solve</span>
+              <div className="flex gap-0.5 ml-1.5">
+                <button className="bg-white/10 rounded px-1 py-0.5 text-[9px] leading-none text-white/70">
+                  {COMMAND_KEY}
+                </button>
+                <button className="bg-white/10 rounded px-1 py-0.5 text-[9px] leading-none text-white/70">
+                  ↵
+                </button>
               </div>
             </div>
           )}
 
           {/* Separator */}
-          <div className="mx-2 h-4 w-px bg-white/20" />
+          <div className="mx-1 h-4 w-px bg-white/20" />
 
           {/* AI Chat Button Component */}
           <AIChatButton isActive={isChatPanelOpen} onToggle={handleToggleChat} />
           
+          {/* AI Provider Selector */}
+          <AIProviderSelector 
+            currentProvider={chatCurrentProvider}
+            onProviderChange={onChatProviderChange}
+            isConnected={chatApiConnected}
+          />
+          
           {/* Live Assist Button - Updated onClick and title */}
           <div
-            className={`flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 transition-colors ${ 
+            className={`flex items-center gap-1 cursor-pointer rounded px-1.5 py-1 transition-colors ${ 
               isLiveAssistantActive 
                 ? "bg-indigo-600 text-white" 
                 : "hover:bg-white/10 text-white/70"
@@ -271,21 +308,21 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             onClick={onToggleLiveAssistant}
           >
              {/* Use a simple icon or just text */}
-             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" >
+             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" >
                 <path d="M17 18C18.1046 18 19 17.1046 19 16C19 14.8954 18.1046 14 17 14C15.8954 14 15 14.8954 15 16C15 17.1046 15.8954 18 17 18Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 <path d="M7 10C8.10457 10 9 9.10457 9 8C9 6.89543 8.10457 6 7 6C5.89543 6 5 6.89543 5 8C5 9.10457 5.89543 10 7 10Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 <path d="M7 14V10M7 10V6M7 10H15M17 14V18M17 14H7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 <path d="M12 21C7.85786 21 4.5 17.6421 4.5 13.5C4.5 9.35786 7.85786 6 12 6C16.1421 6 19.5 9.35786 19.5 13.5C19.5 17.6421 16.1421 21 12 21Z" stroke="currentColor" strokeWidth="1.5"/>
              </svg>
-            <span className="text-[11px] leading-none">Live Assist</span>
+            <span className="text-[10px] leading-none">Live</span>
           </div>
 
           {/* Separator */}
-          <div className="mx-2 h-4 w-px bg-white/20" />
+          <div className="mx-1 h-4 w-px bg-white/20" />
 
           {/* Stealth Mode Button */}
           <div
-            className={`flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 transition-colors ${ 
+            className={`flex items-center gap-1 cursor-pointer rounded px-1.5 py-1 transition-colors ${ 
               stealthMode 
                 ? "bg-purple-600 text-white" 
                 : "hover:bg-white/10 text-white/70"
@@ -293,22 +330,22 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             title={stealthMode ? "Disable Stealth Mode" : "Enable Stealth Mode"}
             onClick={toggleStealthMode}
           >
-            <span className="text-xs">🥷</span>
-            <span className="text-[11px] leading-none">
-              {stealthMode ? "Stealth ON" : "Stealth"}
+            <span className="text-[10px]">🥷</span>
+            <span className="text-[10px] leading-none">
+              {stealthMode ? "ON" : "Stealth"}
             </span>
           </div>
 
           {/* Force Quit Button */}
           <div
-            className="flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 hover:bg-red-600/20 text-red-400 hover:text-red-300 transition-colors"
+            className="flex items-center gap-1 cursor-pointer rounded px-1.5 py-1 hover:bg-red-600/20 text-red-400 hover:text-red-300 transition-colors"
             title="Force Quit Application"
             onClick={handleForceQuit}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            <span className="text-[11px] leading-none">Quit</span>
+            <span className="text-[10px] leading-none">Quit</span>
           </div>
           
           {/* Settings with Tooltip */}
@@ -318,7 +355,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             onMouseLeave={handleMouseLeave}
           >
             {/* Gear icon */}
-            <div className="w-4 h-4 flex items-center justify-center cursor-pointer text-white/70 hover:text-white/90 transition-colors">
+            <div className="w-3 h-3 flex items-center justify-center cursor-pointer text-white/70 hover:text-white/90 transition-colors">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 24 24"
@@ -327,7 +364,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="w-3.5 h-3.5"
+                className="w-3 h-3"
               >
                 <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
                 <circle cx="12" cy="12" r="3" />
@@ -338,18 +375,18 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             {isTooltipVisible && (
               <div
                 ref={tooltipRef}
-                className="absolute top-full left-0 mt-2 w-80 transform -translate-x-[calc(50%-12px)]"
+                className="absolute top-full left-0 mt-2 w-64 transform -translate-x-[calc(50%-12px)]"
                 style={{ zIndex: 100 }}
               >
                 {/* Add transparent bridge */}
                 <div className="absolute -top-2 right-0 w-full h-2" />
-                <div className="p-3 text-xs bg-black/80 backdrop-blur-md rounded-lg border border-white/10 text-white/90 shadow-lg">
-                  <div className="space-y-4">
-                    <h3 className="font-medium truncate">Keyboard Shortcuts</h3>
-                    <div className="space-y-3">
+                <div className="p-2 text-xs bg-black/80 backdrop-blur-md rounded-lg border border-white/10 text-white/90 shadow-lg">
+                  <div className="space-y-2">
+                    <h3 className="text-[11px] font-medium truncate">Shortcuts</h3>
+                    <div className="space-y-1.5">
                       {/* Toggle Command */}
                       <div
-                        className="cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors"
+                        className="cursor-pointer rounded px-1.5 py-1 hover:bg-white/10 transition-colors"
                         onClick={async () => {
                           try {
                             const result =
@@ -376,24 +413,24 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         }}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="truncate">Toggle Window</span>
-                          <div className="flex gap-1 flex-shrink-0">
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                          <span className="text-[10px] truncate">Toggle Window</span>
+                          <div className="flex gap-0.5 flex-shrink-0">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               {COMMAND_KEY}
                             </span>
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               B
                             </span>
                           </div>
                         </div>
-                        <p className="text-[10px] leading-relaxed text-white/70 truncate mt-1">
-                          Show or hide this window.
+                        <p className="text-[9px] leading-tight text-white/70 truncate mt-0.5">
+                          Show or hide window
                         </p>
                       </div>
 
                       {/* Screenshot Command */}
                       <div
-                        className="cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors"
+                        className="cursor-pointer rounded px-1.5 py-1 hover:bg-white/10 transition-colors"
                         onClick={async () => {
                           try {
                             const result =
@@ -420,24 +457,24 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         }}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="truncate">Take Screenshot</span>
-                          <div className="flex gap-1 flex-shrink-0">
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                          <span className="text-[10px] truncate">Screenshot</span>
+                          <div className="flex gap-0.5 flex-shrink-0">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               {COMMAND_KEY}
                             </span>
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               H
                             </span>
                           </div>
                         </div>
-                        <p className="text-[10px] leading-relaxed text-white/70 truncate mt-1">
-                          Take a screenshot of the problem description.
+                        <p className="text-[9px] leading-tight text-white/70 truncate mt-0.5">
+                          Capture screen
                         </p>
                       </div>
 
                       {/* Solve Command */}
                       <div
-                        className={`cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors ${
+                        className={`cursor-pointer rounded px-1.5 py-1 hover:bg-white/10 transition-colors ${
                           screenshotCount > 0
                             ? ""
                             : "opacity-50 cursor-not-allowed"
@@ -473,26 +510,26 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         }}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="truncate">Solve</span>
-                          <div className="flex gap-1 flex-shrink-0">
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                          <span className="text-[10px] truncate">Solve</span>
+                          <div className="flex gap-0.5 flex-shrink-0">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               {COMMAND_KEY}
                             </span>
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               ↵
                             </span>
                           </div>
                         </div>
-                        <p className="text-[10px] leading-relaxed text-white/70 truncate mt-1">
+                        <p className="text-[9px] leading-tight text-white/70 truncate mt-0.5">
                           {screenshotCount > 0
-                            ? "Generate a solution based on the current problem."
-                            : "Take a screenshot first to generate a solution."}
+                            ? "Generate solution"
+                            : "Need screenshot first"}
                         </p>
                       </div>
                       
                       {/* Delete Last Screenshot Command */}
                       <div
-                        className={`cursor-pointer rounded px-2 py-1.5 hover:bg-white/10 transition-colors ${
+                        className={`cursor-pointer rounded px-1.5 py-1 hover:bg-white/10 transition-colors ${
                           screenshotCount > 0
                             ? ""
                             : "opacity-50 cursor-not-allowed"
@@ -524,58 +561,44 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         }}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="truncate">Delete Last Screenshot</span>
-                          <div className="flex gap-1 flex-shrink-0">
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                          <span className="text-[10px] truncate">Delete Last</span>
+                          <div className="flex gap-0.5 flex-shrink-0">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               {COMMAND_KEY}
                             </span>
-                            <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            <span className="bg-white/20 px-1 py-0.5 rounded text-[9px] leading-none">
                               L
                             </span>
                           </div>
                         </div>
-                        <p className="text-[10px] leading-relaxed text-white/70 truncate mt-1">
+                        <p className="text-[9px] leading-tight text-white/70 truncate mt-0.5">
                           {screenshotCount > 0
-                            ? "Remove the most recently taken screenshot."
-                            : "No screenshots to delete."}
+                            ? "Remove last screenshot"
+                            : "No screenshots"}
                         </p>
                       </div>
                     </div>
 
                     {/* Separator and Log Out */}
-                    <div className="pt-3 mt-3 border-t border-white/10">
-                      {/* Simplified Language Selector */}
-                      <div className="mb-3 px-2">
-                        <div 
-                          className="flex items-center justify-between cursor-pointer hover:bg-white/10 rounded px-2 py-1 transition-colors"
-                          onClick={() => extractLanguagesAndUpdate('next')}
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-                              extractLanguagesAndUpdate('prev');
-                            } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-                              extractLanguagesAndUpdate('next');
-                            }
-                          }}
-                        >
-                          <span className="text-[11px] text-white/70">Language</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] text-white/90">{currentLanguage}</span>
-                            <div className="text-white/40 text-[8px]">
-                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
-                                <path d="M7 13l5 5 5-5M7 6l5 5 5-5"/>
-                              </svg>
-                            </div>
-                          </div>
+                    <div className="pt-2 mt-2 border-t border-white/10">
+                      {/* Language Selector - Compact Mode */}
+                      <div className="mb-2 px-1">
+                        <div className="flex items-center justify-between text-[9px] text-white/70">
+                          <span>Language</span>
+                          <LanguageSelector
+                            currentLanguage={currentLanguage}
+                            setLanguage={setLanguage}
+                            compact={true}
+                          />
                         </div>
                       </div>
 
                       {/* API Key Settings */}
-                      <div className="mb-3 px-2 space-y-1">
-                        <div className="flex items-center justify-between text-[13px] font-medium text-white/90">
+                      <div className="mb-2 px-1">
+                        <div className="flex items-center justify-between text-[10px] font-medium text-white/90">
                           <span>API Settings</span>
                           <button
-                            className="bg-white/10 hover:bg-white/20 px-2 py-1 rounded text-[11px]"
+                            className="bg-white/10 hover:bg-white/20 px-1.5 py-0.5 rounded text-[9px]"
                             onClick={() => window.electronAPI.openSettingsPortal()}
                           >
                             Settings
@@ -585,9 +608,9 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 
                       <button
                         onClick={handleSignOut}
-                        className="flex items-center gap-2 text-[11px] text-red-400 hover:text-red-300 transition-colors w-full"
+                        className="flex items-center gap-1 text-[9px] text-red-400 hover:text-red-300 transition-colors w-full px-1"
                       >
-                        <div className="w-4 h-4 flex items-center justify-center">
+                        <div className="w-3 h-3 flex items-center justify-center">
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
                             viewBox="0 0 24 24"
@@ -596,7 +619,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                             strokeWidth="2"
                             strokeLinecap="round"
                             strokeLinejoin="round"
-                            className="w-3 h-3"
+                            className="w-2.5 h-2.5"
                           >
                             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
                             <polyline points="16 17 21 12 16 7" />

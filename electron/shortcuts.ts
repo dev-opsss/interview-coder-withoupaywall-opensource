@@ -146,6 +146,8 @@ export class ShortcutsHelper {
 
     globalShortcut.register("CommandOrControl+Q", () => {
       safeLog("Command/Ctrl + Q pressed. Quitting application.")
+      // Set force quit flag to bypass stealth mode interception
+      this.deps.setForceQuitting(true)
       app.quit()
     })
 

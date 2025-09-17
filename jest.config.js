@@ -5,8 +5,8 @@ module.exports = {
   // Setup files
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   
-  // Module name mapping for imports (CORRECT property name is moduleNameMapping)
-  moduleNameMapping: {
+  // Module name mapping for imports
+  moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^@electron/(.*)$': '<rootDir>/electron/$1',
     '^@tests/(.*)$': '<rootDir>/tests/$1',
@@ -37,8 +37,9 @@ module.exports = {
     '<rootDir>/dist-electron/',
     '<rootDir>/release/',
     '<rootDir>/tests/components/App.test.tsx', // Skip problematic App test
-    '<rootDir>/tests/components/Settings/', // Skip Settings tests until components exist
-    '<rootDir>/tests/electron/', // Skip electron tests with import issues
+    '<rootDir>/tests/components/Settings/SettingsDialog.test.tsx', // Skip existing problematic SettingsDialog test
+    '<rootDir>/tests/electron/MultiMonitorManager.test.ts', // Skip electron tests with import issues
+    '<rootDir>/tests/electron/WindowManager.test.ts', // Skip electron tests with import issues
   ],
   
   // Coverage configuration

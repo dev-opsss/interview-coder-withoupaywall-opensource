@@ -16,8 +16,10 @@ import {
 import { ToastContext } from "./contexts/toast"
 import { WelcomeScreen } from "./components/WelcomeScreen"
 import { SettingsDialog } from "./components/Settings/SettingsDialog"
+import MultiMonitorDebugDialog from './components/MultiMonitor/MultiMonitorDebugDialog'
 import { GoogleSpeechService } from './services/googleSpeechService'
 import { VoiceTranscriptionPanel } from './components/VoiceTranscriptionPanel'
+import { ChatPanel } from './components/Chat/ChatPanel'
 
 // Utility function to convert Float32Array PCM audio data to a WAV Blob
 // (Adapted from GoogleSpeechService or could be moved to a shared utils file)
@@ -135,7 +137,37 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [isChatPanelOpen, setIsChatPanelOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
-  const [chatInputValue, setChatInputValue] = useState("");
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  
+  // AI Chat connection status
+  const [chatApiConnected, setChatApiConnected] = useState(false);
+  const [chatProviderName, setChatProviderName] = useState('AI');
+  const [chatCurrentProvider, setChatCurrentProvider] = useState<'openai' | 'gemini' | 'anthropic'>('openai');
+
+
+  // Keyboard shortcuts for app controls
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Chat toggle: ⌘J (Mac) / Ctrl+J (Windows) - common for chat/console
+      if ((event.metaKey || event.ctrlKey) && event.key === 'j') {
+        event.preventDefault();
+        setIsChatPanelOpen(!isChatPanelOpen);
+      }
+      // Force quit: ⌘⌥Q (Mac) / Ctrl+Alt+Q (Windows) - non-conflicting
+      else if ((event.metaKey || event.ctrlKey) && event.altKey && event.key === 'q') {
+        event.preventDefault();
+        if (window.confirm('Force quit Interview Coder? Any unsaved work will be lost.')) {
+          window.electronAPI?.invoke('force-quit-app').catch(() => {
+            // Fallback if IPC fails
+            window.close();
+          });
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isChatPanelOpen]);
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -566,6 +598,44 @@ function App() {
   const handleCloseSettings = useCallback((open: boolean) => {
     console.log('Settings dialog state changed:', open);
     setIsSettingsOpen(open);
+    
+    // Refresh chat API connection status when settings close
+    if (!open) {
+      const recheckChatConnection = async () => {
+        try {
+          const config = await window.electronAPI.getConfig();
+          const openaiKey = await window.electronAPI.getOpenAIApiKey();
+          const geminiKey = await window.electronAPI.getGeminiApiKey();
+          const anthropicKey = await window.electronAPI.getAnthropicApiKey();
+          
+          const provider = config?.apiProvider || 'openai';
+          let hasKey = false;
+          let providerDisplayName = 'AI';
+          
+          switch (provider) {
+            case 'openai':
+              hasKey = !!openaiKey;
+              providerDisplayName = 'OpenAI';
+              break;
+            case 'gemini':
+              hasKey = !!geminiKey;
+              providerDisplayName = 'Gemini';
+              break;
+            case 'anthropic':
+              hasKey = !!anthropicKey;
+              providerDisplayName = 'Claude';
+              break;
+          }
+          
+          setChatCurrentProvider(provider);
+          setChatApiConnected(hasKey);
+          setChatProviderName(providerDisplayName);
+        } catch (error) {
+          console.error('Failed to recheck chat API connection:', error);
+        }
+      };
+      recheckChatConnection();
+    }
   }, []);
 
   const handleApiKeySave = useCallback(async (apiKey: string) => {
@@ -588,6 +658,84 @@ function App() {
   const toggleChatPanel = useCallback(() => {
     setIsChatPanelOpen(prev => !prev);
   }, []);
+
+  // Handle chat provider change
+  const handleChatProviderChange = useCallback(async (provider: 'openai' | 'gemini' | 'anthropic') => {
+    try {
+      // Update the API provider in config
+      await window.electronAPI.updateConfig({ apiProvider: provider });
+      
+      // Update local state
+      setChatCurrentProvider(provider);
+      
+      // Check if the new provider has an API key
+      let hasKey = false;
+      let providerDisplayName = 'AI';
+      
+      switch (provider) {
+        case 'openai':
+          const openaiKey = await window.electronAPI.getOpenAIApiKey();
+          hasKey = !!openaiKey;
+          providerDisplayName = 'OpenAI';
+          break;
+        case 'gemini':
+          const geminiKey = await window.electronAPI.getGeminiApiKey();
+          hasKey = !!geminiKey;
+          providerDisplayName = 'Gemini';
+          break;
+        case 'anthropic':
+          const anthropicKey = await window.electronAPI.getAnthropicApiKey();
+          hasKey = !!anthropicKey;
+          providerDisplayName = 'Claude';
+          break;
+      }
+      
+      setChatApiConnected(hasKey);
+      setChatProviderName(providerDisplayName);
+      
+      // Show feedback to user
+      if (hasKey) {
+        showToast('Provider Changed', `Switched to ${providerDisplayName}`, 'success');
+      } else {
+        showToast('API Key Missing', `${providerDisplayName} API key not configured. Please add it in Settings.`, 'error');
+      }
+    } catch (error) {
+      console.error('Failed to change chat provider:', error);
+      showToast('Error', 'Failed to change AI provider', 'error');
+    }
+  }, [showToast]);
+
+  // Chat message handler
+  const handleSendMessage = useCallback(async (message: string) => {
+    // Add user message to history
+    const userMessage = { role: 'user', content: message };
+    setChatHistory(prev => [...prev, userMessage]);
+    
+    setIsChatLoading(true);
+    
+    try {
+      // Call the actual AI service (same as live assistance)
+      const result = await window.electronAPI.handleAiQuery({ 
+        query: message, 
+        language: currentLanguage 
+      });
+
+      if (result && result.success && typeof result.data === 'string') {
+        const aiResponse = { role: 'assistant', content: result.data };
+        setChatHistory(prev => [...prev, aiResponse]);
+      } else {
+        console.error('AI Chat error:', result?.error);
+        const errorResponse = { role: 'assistant', content: `Error: ${result?.error || "Failed to get AI response."}` };
+        setChatHistory(prev => [...prev, errorResponse]);
+      }
+    } catch (error: any) {
+      console.error('Chat error:', error);
+      const errorResponse = { role: 'assistant', content: `Error: ${error.message || "Could not reach AI service."}` };
+      setChatHistory(prev => [...prev, errorResponse]);
+    } finally {
+      setIsChatLoading(false);
+    }
+  }, [currentLanguage]);
 
   // --- START: Live Assistant Toggle (Reverted to simple toggle) ---
   const toggleLiveAssistant = useCallback(() => {
@@ -623,35 +771,6 @@ function App() {
     }
   }, [isRecording, startRecording, stopRecording]);
 
-  // Chat message handler
-  const handleSendMessage = async (messageContent: string) => {
-    if (!messageContent.trim()) return;
-        
-    const newUserMessage = { role: 'user', content: messageContent };
-    setChatHistory(prev => [...prev, newUserMessage]);
-    setChatInputValue(""); // Clear input immediately
-
-    try {
-      // Call the backend API for AI response
-      const result = await window.electronAPI.handleAiQuery({ 
-        query: messageContent, 
-        language: currentLanguage 
-      });
-
-      if (result && result.success && typeof result.data === 'string') {
-        const newAssistantMessage = { role: 'assistant', content: result.data };
-        setChatHistory(prev => [...prev, newAssistantMessage]);
-      } else {
-        showToast("AI Query Error", `Error: ${result?.error || "Failed to get response."}`, "error");
-        const errorMessage = { role: 'assistant', content: `Error: ${result?.error || "Failed to get response."}` };
-        setChatHistory(prev => [...prev, errorMessage]);
-      }
-    } catch (error: any) {
-      showToast("Communication Error", `Error: ${error.message || "Could not reach AI service."}`, "error");
-      const errorMessage = { role: 'assistant', content: `Error: ${error.message || "Could not reach AI service."}` };
-      setChatHistory(prev => [...prev, errorMessage]);
-    }
-  };
 
   // Function to process audio with Whisper REST API
   const processAudioWithWhisper = async (audioChunks: Blob[]): Promise<{ text: string } | undefined> => {
@@ -702,8 +821,6 @@ function App() {
       console.log("Transcription result:", data);
 
       if (data.text) {
-        // Update chat input with transcription
-        setChatInputValue(prev => prev + (prev ? ' ' : '') + data.text);
         showToast("Transcription Complete", "Your speech has been converted to text", "success");
         
         // Return the transcription result
@@ -762,6 +879,49 @@ function App() {
       loadSpeechService();
     }
   }, [isInitialized, showToast]);
+
+  // Check AI Chat connection status
+  useEffect(() => {
+    const checkChatApiConnection = async () => {
+      try {
+        const config = await window.electronAPI.getConfig();
+        const openaiKey = await window.electronAPI.getOpenAIApiKey();
+        const geminiKey = await window.electronAPI.getGeminiApiKey();
+        const anthropicKey = await window.electronAPI.getAnthropicApiKey();
+        
+        const provider = config?.apiProvider || 'openai';
+        let hasKey = false;
+        let providerDisplayName = 'AI';
+        
+        switch (provider) {
+          case 'openai':
+            hasKey = !!openaiKey;
+            providerDisplayName = 'OpenAI';
+            break;
+          case 'gemini':
+            hasKey = !!geminiKey;
+            providerDisplayName = 'Gemini';
+            break;
+          case 'anthropic':
+            hasKey = !!anthropicKey;
+            providerDisplayName = 'Claude';
+            break;
+        }
+        
+        setChatCurrentProvider(provider);
+        setChatApiConnected(hasKey);
+        setChatProviderName(providerDisplayName);
+      } catch (error) {
+        console.error('Failed to check chat API connection:', error);
+        setChatApiConnected(false);
+        setChatProviderName('AI');
+      }
+    };
+    
+    if (isInitialized) {
+      checkChatApiConnection();
+    }
+  }, [isInitialized]);
 
   // --- START: Live Assistance Logic ---
   // Function to handle fetching AI assistance based on transcribed text
@@ -866,6 +1026,9 @@ Provide only the key talking points/keywords as bullet points, without any intro
                   onToggleLiveAssistant={toggleLiveAssistant}
                   isLiveAssistantActive={isLiveAssistantActive}
                   isChatPanelOpen={isChatPanelOpen}
+                  chatCurrentProvider={chatCurrentProvider}
+                  chatApiConnected={chatApiConnected}
+                  onChatProviderChange={handleChatProviderChange}
                 />
               ) : (
                 <WelcomeScreen onOpenSettings={handleOpenSettings} />
@@ -888,6 +1051,9 @@ Provide only the key talking points/keywords as bullet points, without any intro
             open={isSettingsOpen} 
             onOpenChange={handleCloseSettings} 
           />
+          
+          {/* Multi-Monitor Debug Dialog */}
+          <MultiMonitorDebugDialog />
           
           <Toast
             open={toastState.open}
@@ -919,75 +1085,14 @@ Provide only the key talking points/keywords as bullet points, without any intro
           )}
           
           {isChatPanelOpen && (
-            <div className="fixed top-20 right-4 bottom-20 z-50 w-80 bg-white dark:bg-gray-800 shadow-2xl rounded-xl overflow-hidden flex flex-col border border-indigo-100 dark:border-gray-700">
-              <div className="p-3 bg-gradient-to-r from-violet-600 to-indigo-700 flex justify-between items-center">
-                <h3 className="font-medium text-white flex items-center text-sm">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="mr-1">
-                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/>
-                  </svg>
-                  AI Assistant
-                </h3>
-                <button onClick={toggleChatPanel} className="text-white hover:text-gray-200 transition-colors">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </button>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-gray-50 dark:bg-gray-900">
-                {chatHistory.length === 0 && (
-                  <div className="flex items-center justify-center h-full opacity-60">
-                    <div className="text-center">
-                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="mx-auto mb-2 text-indigo-500">
-                        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
-                      </svg>
-                      <p className="text-gray-500 dark:text-gray-400 text-sm">Ask a question</p>
-                    </div>
-                  </div>
-                )}
-                {chatHistory.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] p-2 rounded-lg text-sm ${
-                      msg.role === 'user' 
-                        ? 'bg-indigo-600 text-white rounded-tr-none shadow-sm' 
-                        : 'bg-white dark:bg-gray-800 text-black dark:text-white rounded-tl-none shadow-md border border-gray-100 dark:border-gray-700'
-                    }`}>
-                      {msg.content}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              
-              <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-                <form 
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (chatInputValue.trim()) {
-                      handleSendMessage(chatInputValue);
-                    }
-                  }}
-                  className="flex space-x-2"
-                >
-                  <input
-                    type="text"
-                    value={chatInputValue}
-                    onChange={(e) => setChatInputValue(e.target.value)}
-                    className="flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
-                    placeholder="Type your message..."
-                  />
-                  <button
-                    type="submit"
-                    disabled={!chatInputValue.trim()}
-                    className="p-2 bg-gradient-to-r from-violet-600 to-indigo-700 hover:from-violet-500 hover:to-indigo-600 text-white rounded-lg disabled:opacity-50 transition-colors"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M22 2L11 13" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </button>
-                </form>
-              </div>
-            </div>
+            <ChatPanel
+              history={chatHistory}
+              isLoading={isChatLoading}
+              onSendMessage={handleSendMessage}
+              onClose={toggleChatPanel}
+              isConnected={chatApiConnected}
+              providerName={chatProviderName}
+            />
           )}
         </ToastContext.Provider>
       </ToastProvider>

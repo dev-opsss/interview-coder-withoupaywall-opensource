@@ -1943,8 +1943,8 @@ DO NOT give generic responses. Analyze the ACTUAL error in the screenshot.`
         // Clear any previous audio data
         this.googleSpeechService.clearAudioBuffer();
         
-        // Add audio data to Google Speech service - CONVERT to Buffer
-        this.googleSpeechService.sendAudioChunk(Buffer.from(buffer)); // <-- Remove role argument
+        // Add audio data to Google Speech service
+        this.googleSpeechService.sendAudioChunk(buffer);
         
         // Get transcription
         safeLog('Calling GoogleSpeechService.transcribeAudio()');

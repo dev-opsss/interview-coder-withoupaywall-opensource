@@ -56,6 +56,10 @@ const mockElectronAPI = {
   'save-ai-settings': jest.fn(),
   'handle-ai-query': jest.fn(),
   
+  // Logging configuration
+  'get-logging-config': jest.fn(),
+  'set-logging-config': jest.fn(),
+  
   // Event listeners
   onScreenshotTaken: jest.fn(() => () => {}),
   onResetView: jest.fn(() => () => {}),

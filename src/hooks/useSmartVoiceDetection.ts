@@ -110,6 +110,10 @@ export function useSmartVoiceDetection({
   // Ref to track current audio levels to determine true speaker
   const audioLevelsRef = useRef<{user: number, interviewer: number}>({user: 0, interviewer: 0});
   const lastActiveSpeakerRef = useRef<'user' | 'interviewer' | null>(null);
+  // New: hard lock of which role is currently allowed to stream frames into STT
+  const activeRoleRef = useRef<'user' | 'interviewer' | null>(null);
+  // New: track whether we've already started the Google stream to avoid redundant start commands
+  const hasStartedStreamRef = useRef<boolean>(false);
   
   // Function to determine which speaker is truly active based on audio levels
   const determineActiveSpeaker = useCallback(() => {
@@ -383,11 +387,16 @@ export function useSmartVoiceDetection({
             // ---> END: Log probabilities
 
             if (audioFrame && speakingRef.current) { 
+              // Only allow frames from the current active role into the STT stream
+              if (activeRoleRef.current && activeRoleRef.current !== role) {
+                return; // Gate other role frames while a role is active
+              }
               // console.log(`[VAD ${role}] Sending audio frame, size: ${audioFrame.length}`); // DEBUG
               // const buffer = Buffer.from(audioFrame.buffer); // <-- Error: Buffer unavailable here
               // Use specific channel for raw audio data - send ArrayBuffer directly
               if (window.electronAPI) {
-                window.electronAPI.send(IPC_CHANNELS.AUDIO_DATA, audioFrame.buffer);
+                // Attach speaker role to each audio frame for downstream labeling
+                window.electronAPI.send(IPC_CHANNELS.AUDIO_DATA, { audio: audioFrame.buffer, role });
               } else {
                 // Add a warning if the API is not available
                 console.warn('window.electronAPI not available when trying to send audio frame data.');
@@ -406,8 +415,16 @@ export function useSmartVoiceDetection({
 
             // Determine active speaker and start stream via IPC
             lastActiveSpeakerRef.current = role;
+            // If no active role, lock this role as the active one
+            if (!activeRoleRef.current) {
+              activeRoleRef.current = role;
+            }
             console.log(`---> [VAD ${role}] Setting googleStreamCommand to 'start'`); // DEBUG
-            setGoogleStreamCommand('start'); // <-- Trigger useEffect for IPC
+            // Only send start once per listening session
+            if (!hasStartedStreamRef.current) {
+              setGoogleStreamCommand('start'); // <-- Trigger useEffect for IPC
+              hasStartedStreamRef.current = true;
+            }
             // ipcRenderer.send(IPC_CHANNELS.START, { language: 'en-US' /* Or get lang dynamically */ }); // <-- Error: ipcRenderer unavailable here
 
             // Call the provided callback
@@ -424,10 +441,16 @@ export function useSmartVoiceDetection({
             isUserSpeakingRef.current = false;
             isSpeakerSpeakingRef.current = false;
 
-            // --- REMOVED: Stop the stream via IPC ---
-            // console.log(`---> [VAD ${role}] onSpeechEnd FIRED, Setting googleStreamCommand to 'stop'`); // DEBUG
-            // setGoogleStreamCommand('stop'); // <-- Trigger useEffect for IPC
-            // --- END REMOVED ---
+            // Release the active role lock shortly after end to allow other role to take over
+            if (activeRoleRef.current === role) {
+              if (silenceTimeoutRef.current[role]) {
+                clearTimeout(silenceTimeoutRef.current[role]!);
+              }
+              // Small grace period to avoid flapping between roles mid-phrase
+              silenceTimeoutRef.current[role] = setTimeout(() => {
+                activeRoleRef.current = null;
+              }, 250);
+            }
           },
           onVADMisfire: () => {
             console.log(`${role} VAD misfire detected`);
@@ -505,6 +528,9 @@ export function useSmartVoiceDetection({
     // --- END ADDED ---
 
     cleanup('all');
+    // Reset stream/session locks
+    hasStartedStreamRef.current = false;
+    activeRoleRef.current = null;
   }, [cleanup]); // Dependency is only stable cleanup
 
   // Effect to automatically stop when component unmounts

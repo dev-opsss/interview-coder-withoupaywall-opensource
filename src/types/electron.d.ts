@@ -73,6 +73,8 @@ export interface ElectronAPI {
   // Stealth mode methods
   enableStealthMode: () => Promise<{ success: boolean; message?: string; error?: string }>
   disableStealthMode: () => Promise<{ success: boolean; message?: string; error?: string }>
+  getStealthModeStatus: () => Promise<{ isEnabled: boolean; error?: string }>
+  onStealthModeChanged: (callback: (isEnabled: boolean) => void) => () => void
   getProcessInfo: () => Promise<{ pid: number; title: string; platform: string; argv: string[]; version: string; error?: string }>
   forceQuitApp: () => Promise<{ success: boolean; error?: string }>
   hasServiceAccountCredentials: () => Promise<boolean>

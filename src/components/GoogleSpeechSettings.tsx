@@ -119,44 +119,43 @@ export const GoogleSpeechSettings: React.FC<GoogleSpeechSettingsProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-2">
       <Toaster position="top-right" />
       <div className="setting-group">
-        <h3 className="text-lg font-medium text-black-900 dark:text-gray-100 mb-4">Google Cloud Speech API Authentication</h3>
+        <h3 className="text-xs font-medium text-white mb-1">Google Cloud Speech API</h3>
         
         {/* API Key section */}
-        <div className="mb-6">
-          <label className="block mb-2 text-sm font-medium text-black-700 dark:text-gray-300">API Key</label>
-          <div className="flex flex-col sm:flex-row gap-2">
+        <div className="mb-2">
+          <label className="block mb-1 text-xs font-medium text-white/80">API Key</label>
+          <div className="flex flex-col gap-1">
             <input 
               type="password" 
               value={apiKey} 
               onChange={handleApiKeyChange}
-              className="flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
-              placeholder="Enter your Google Speech API Key" 
+              className="flex-1 p-1.5 border border-white/20 rounded bg-black/50 text-white text-xs h-7"
+              placeholder="Google Speech API Key" 
               disabled={isLoading}
             />
             <button 
               onClick={saveApiKey} 
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs h-7 disabled:opacity-50"
               disabled={isLoading}
             >
-              {isLoading ? 'Saving...' : 'Save API Key'}
+              {isLoading ? 'Saving...' : 'Save'}
             </button>
           </div>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Enter your Google Cloud Speech-to-Text API key for basic authentication.
+          <p className="mt-0.5 text-[10px] text-white/50">
+            Basic authentication key
           </p>
         </div>
         
         {/* Service Account section */}
         <div>
-          <label className="block mb-2 text-sm font-medium text-black-700 dark:text-gray-300">
+          <label className="block mb-1 text-xs font-medium text-white/80">
             Service Account (Recommended)
           </label>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-            Upload a Google Cloud service account JSON file for enhanced security and features.
-            This provides more capabilities than just an API key.
+          <p className="text-[10px] text-white/50 mb-1">
+            Upload JSON file for enhanced security
           </p>
           
           <input 
@@ -169,51 +168,45 @@ export const GoogleSpeechSettings: React.FC<GoogleSpeechSettingsProps> = ({
             disabled={isLoading}
           />
           
-          <div className="flex flex-col sm:flex-row gap-2">
+          <div className="flex flex-col gap-1">
             <button 
               onClick={() => serviceAccountFileRef.current?.click()} 
-              className="px-2 py-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-xl font-small flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              className="px-2 py-1 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded flex items-center justify-center gap-1 text-xs h-7 disabled:opacity-50"
               disabled={isLoading}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l-3 3m3-3l3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.338 0 4.5 4.5 0 01-1.41 8.775H6.75z" />
               </svg>
-              Choose Service Account JSON File
+              Choose JSON
             </button>
             
             {serviceAccountFileName && (
               <button 
                 onClick={clearServiceAccountFile}
-                className="px-2 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl font-small flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded flex items-center justify-center gap-1 text-xs h-7 disabled:opacity-50"
                 disabled={isLoading}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12.56 0c1.153 0 2.24.032 3.22.096M15 5.25a3 3 0 11-6 0 3 3 0 016 0zm6 3a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm-12.75 0a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
                 </svg>
-                Clear Credentials
+                Clear
               </button>
             )}
           </div>
           
           {serviceAccountFileName && (
-            <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded">
-              <span className="text-green-800 dark:text-green-400 text-sm font-medium">
+            <div className="mt-1 p-1 bg-green-900/20 border border-green-800 rounded">
+              <span className="text-green-400 text-[10px] font-medium">
                 ✓ {serviceAccountFileName}
               </span>
             </div>
           )}
           
-          <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
-            <h4 className="text-sm font-medium text-blue-800 dark:text-blue-400 mb-2">How to get a service account file:</h4>
-            <ol className="list-decimal list-inside text-sm text-blue-700 dark:text-blue-300 space-y-1">
-              <li>Go to the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="underline">Google Cloud Console</a></li>
-              <li>Create or select an existing project</li>
-              <li>Enable the Speech-to-Text API for your project</li>
-              <li>Navigate to "IAM & Admin" {'->'} "Service Accounts"</li>
-              <li>Create a new service account or select an existing one</li>
-              <li>Create and download a new key (JSON format)</li>
-              <li>Upload the downloaded JSON file here</li>
-            </ol>
+          <div className="mt-1 p-1.5 bg-blue-900/20 border border-blue-800 rounded">
+            <h4 className="text-[10px] font-medium text-blue-400 mb-1">Setup:</h4>
+            <p className="text-[9px] text-blue-300">
+              Get JSON from <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="underline">Google Cloud Console</a> → IAM & Admin → Service Accounts
+            </p>
           </div>
         </div>
       </div>

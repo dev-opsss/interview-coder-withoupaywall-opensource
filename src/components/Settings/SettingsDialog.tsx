@@ -17,6 +17,8 @@ import { useToast } from "../../contexts/toast";
 import { GoogleSpeechService } from '../../services/googleSpeechService';
 import { GoogleSpeechSettings } from "../../components/GoogleSpeechSettings";
 import MultiMonitorSettings from "./MultiMonitorSettings";
+import MonitorSelector from "../MultiMonitor/MonitorSelector";
+import { LoggingSettings, LoggingSettingsRef } from "./LoggingSettings";
 
 // Custom dialog content without overlay
 const DialogContentNoOverlay = React.forwardRef<
@@ -224,6 +226,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const [googleApiKey, setGoogleApiKey] = useState('');
   const [speechService, setSpeechService] = useState('whisper');
   const [isTestingGoogleKey, setIsTestingGoogleKey] = useState(false);
+  
+  // Ref for LoggingSettings component
+  const loggingSettingsRef = React.useRef<LoggingSettingsRef>(null);
 
   // Sync with external open state
   useEffect(() => {
@@ -354,6 +359,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const handleSave = async () => {
     setIsLoading(true);
     try {
+      // Save API settings
       const result = await window.electronAPI.updateConfig({
         apiKey,
         apiProvider,
@@ -366,7 +372,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         debuggingModel,
       });
       
-      if (result) {
+      // Save logging settings
+      let loggingSaved = true;
+      if (loggingSettingsRef.current) {
+        loggingSaved = await loggingSettingsRef.current.save();
+      }
+      
+      if (result && loggingSaved) {
         showToast("Success", "Settings saved successfully", "success");
         handleOpenChange(false);
         
@@ -374,6 +386,8 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         setTimeout(() => {
           window.location.reload();
         }, 1500);
+      } else {
+        throw new Error("Failed to save some settings");
       }
     } catch (error) {
       console.error("Failed to save settings:", error);
@@ -491,14 +505,14 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           top: '50%',
           left: '50%',
           transform: 'translate(-50%, -50%)',
-          width: 'min(480px, 95vw)',
+          width: 'min(380px, 95vw)',
           height: 'auto',
-          minHeight: '400px',
-          maxHeight: '85vh',
+          minHeight: '250px',
+          maxHeight: '70vh',
           overflowY: 'auto',
           zIndex: 9999,
           margin: 0,
-          padding: '24px',
+          padding: '8px',
           transition: 'opacity 0.25s ease, transform 0.25s ease',
           animation: 'fadeIn 0.25s ease forwards',
           opacity: 0.98,
@@ -506,82 +520,82 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           msOverflowStyle: 'none' /* IE/Edge */
         }}
       >        
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription className="text-white/70">
-            Configure API keys, model preferences, and speech settings for Interview Coder.
+        <DialogHeader className="pb-1 border-b border-white/10">
+          <DialogTitle className="text-base font-medium text-white">Settings</DialogTitle>
+          <DialogDescription className="text-xs text-white/60 mt-0.5">
+            API keys, models, speech, monitors
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 py-3">
+        <div className="space-y-1 py-1 text-xs">
           {/* API Provider Selection */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-white">API Provider</label>
-            <div className="flex gap-2">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-white/90 uppercase tracking-wide">Provider</label>
+            <div className="flex gap-1">
               <div
-                className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${
+                className={`flex-1 p-1 rounded cursor-pointer transition-colors ${
                   apiProvider === "openai"
                     ? "bg-white/10 border border-white/20"
                     : "bg-black/30 border border-white/5 hover:bg-white/5"
                 }`}
                 onClick={() => handleProviderChange("openai")}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <div
-                    className={`w-3 h-3 rounded-full ${
+                    className={`w-2 h-2 rounded-full ${
                       apiProvider === "openai" ? "bg-white" : "bg-white/20"
                     }`}
                   />
                   <div className="flex flex-col">
-                    <p className="font-medium text-white text-sm">OpenAI</p>
-                    <p className="text-xs text-white/60">GPT-4o models</p>
+                    <p className="font-medium text-white text-xs">OpenAI</p>
+                    <p className="text-[10px] text-white/50">GPT-4o</p>
                   </div>
                 </div>
               </div>
               <div
-                className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${
+                className={`flex-1 p-1 rounded cursor-pointer transition-colors ${
                   apiProvider === "gemini"
                     ? "bg-white/10 border border-white/20"
                     : "bg-black/30 border border-white/5 hover:bg-white/5"
                 }`}
                 onClick={() => handleProviderChange("gemini")}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <div
-                    className={`w-3 h-3 rounded-full ${
+                    className={`w-2 h-2 rounded-full ${
                       apiProvider === "gemini" ? "bg-white" : "bg-white/20"
                     }`}
                   />
                   <div className="flex flex-col">
-                    <p className="font-medium text-white text-sm">Gemini</p>
-                    <p className="text-xs text-white/60">Gemini 1.5 models</p>
+                    <p className="font-medium text-white text-xs">Gemini</p>
+                    <p className="text-[10px] text-white/50">1.5 Pro</p>
                   </div>
                 </div>
               </div>
               <div
-                className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${
+                className={`flex-1 p-1 rounded cursor-pointer transition-colors ${
                   apiProvider === "anthropic"
                     ? "bg-white/10 border border-white/20"
                     : "bg-black/30 border border-white/5 hover:bg-white/5"
                 }`}
                 onClick={() => handleProviderChange("anthropic")}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <div
-                    className={`w-3 h-3 rounded-full ${
+                    className={`w-2 h-2 rounded-full ${
                       apiProvider === "anthropic" ? "bg-white" : "bg-white/20"
                     }`}
                   />
                   <div className="flex flex-col">
-                    <p className="font-medium text-white text-sm">Claude</p>
-                    <p className="text-xs text-white/60">Claude 3 models</p>
+                    <p className="font-medium text-white text-xs">Claude</p>
+                    <p className="text-[10px] text-white/50">3.5 Sonnet</p>
                   </div>
                 </div>
               </div>
             </div>
           </div>
           
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-white" htmlFor="apiKey">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-white" htmlFor="apiKey">
             {apiProvider === "openai" ? "OpenAI API Key" : 
              apiProvider === "gemini" ? "Gemini API Key" : 
              "Anthropic API Key"}
@@ -593,113 +607,95 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
               onChange={(e) => handleApiKeyChange(e.target.value)}
               placeholder={
                 apiProvider === "openai" ? "sk-..." : 
-                apiProvider === "gemini" ? "Enter your Gemini API key" :
+                apiProvider === "gemini" ? "API key" :
                 "sk-ant-..."
               }
-              className="bg-black/50 border-white/10 text-white"
+              className="bg-black/50 border-white/10 text-white text-sm h-9"
             />
             {/* Display appropriate label and masked key for each provider */}
             {apiProvider === "openai" && openaiApiKey && (
-              <p className="text-xs text-white/50 flex items-center">
-                <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
+              <p className="text-[10px] text-white/50 flex items-center">
+                <span className="bg-white/20 text-white/80 px-1.5 py-0.5 rounded text-[8px] mr-1.5">
                   OpenAI
                 </span>
                 {maskApiKey(openaiApiKey)}
               </p>
             )}
             {apiProvider === "gemini" && geminiApiKey && (
-              <p className="text-xs text-white/50 flex items-center">
-                <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
+              <p className="text-[10px] text-white/50 flex items-center">
+                <span className="bg-white/20 text-white/80 px-1.5 py-0.5 rounded text-[8px] mr-1.5">
                   Gemini
                 </span>
                 {maskApiKey(geminiApiKey)}
               </p>
             )}
             {apiProvider === "anthropic" && anthropicApiKey && (
-              <p className="text-xs text-white/50 flex items-center">
-                <span className="bg-white/20 text-white/80 px-2 py-0.5 rounded-full text-[10px] mr-2">
+              <p className="text-[10px] text-white/50 flex items-center">
+                <span className="bg-white/20 text-white/80 px-1.5 py-0.5 rounded text-[8px] mr-1.5">
                   Claude
                 </span>
                 {maskApiKey(anthropicApiKey)}
               </p>
             )}
             <p className="text-xs text-white/50">
-              Your API key is stored locally and never sent to any server except {apiProvider === "openai" ? "OpenAI" : 
+              Stored locally, sent only to {apiProvider === "openai" ? "OpenAI" : 
               apiProvider === "gemini" ? "Google" : 
               "Anthropic"}
             </p>
-            <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
-              <p className="text-xs text-white/80 mb-1">Don't have an API key?</p>
+            <div className="mt-1.5 p-1.5 rounded bg-white/5 border border-white/10">
+              <p className="text-xs text-white/80 mb-1">Need API key?</p>
               {apiProvider === "openai" ? (
-                <>
-                  <p className="text-xs text-white/60 mb-1">1. Create an account at <button 
-                    onClick={() => openExternalLink('https://platform.openai.com/signup')} 
-                    className="text-blue-400 hover:underline cursor-pointer">OpenAI</button>
-                  </p>
-                  <p className="text-xs text-white/60 mb-1">2. Go to <button 
+                <p className="text-xs text-white/60">
+                  Get one at <button 
                     onClick={() => openExternalLink('https://platform.openai.com/api-keys')} 
-                    className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-                  </p>
-                  <p className="text-xs text-white/60">3. Create a new secret key and paste it here</p>
-                </>
+                    className="text-blue-400 hover:underline cursor-pointer">platform.openai.com</button>
+                </p>
               ) : apiProvider === "gemini" ?  (
-                <>
-                  <p className="text-xs text-white/60 mb-1">1. Create an account at <button 
-                    onClick={() => openExternalLink('https://aistudio.google.com/')} 
-                    className="text-blue-400 hover:underline cursor-pointer">Google AI Studio</button>
-                  </p>
-                  <p className="text-xs text-white/60 mb-1">2. Go to the <button 
+                <p className="text-xs text-white/60">
+                  Get one at <button 
                     onClick={() => openExternalLink('https://aistudio.google.com/app/apikey')} 
-                    className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-                  </p>
-                  <p className="text-xs text-white/60">3. Create a new API key and paste it here</p>
-                </>
+                    className="text-blue-400 hover:underline cursor-pointer">aistudio.google.com</button>
+                </p>
               ) : (
-                <>
-                  <p className="text-xs text-white/60 mb-1">1. Create an account at <button 
-                    onClick={() => openExternalLink('https://console.anthropic.com/signup')} 
-                    className="text-blue-400 hover:underline cursor-pointer">Anthropic</button>
-                  </p>
-                  <p className="text-xs text-white/60 mb-1">2. Go to the <button 
+                <p className="text-xs text-white/60">
+                  Get one at <button 
                     onClick={() => openExternalLink('https://console.anthropic.com/settings/keys')} 
-                    className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-                  </p>
-                  <p className="text-xs text-white/60">3. Create a new API key and paste it here</p>
-                </>
+                    className="text-blue-400 hover:underline cursor-pointer">console.anthropic.com</button>
+                </p>
               )}
             </div>
           </div>
           
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-white">Keyboard Shortcuts</label>
-            <div className="bg-black/30 border border-white/10 rounded-lg p-2">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <div className="text-white/70">Toggle Visibility</div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-white">Keyboard Shortcuts</label>
+            <div className="bg-black/30 border border-white/10 rounded p-1.5">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+                <div className="text-white/70">Toggle</div>
                 <div className="text-white/90 font-mono text-right">⌘B</div>
                 
-                <div className="text-white/70">Take Screenshot</div>
+                <div className="text-white/70">Screenshot</div>
                 <div className="text-white/90 font-mono text-right">⌘H</div>
                 
-                <div className="text-white/70">Process Screenshots</div>
+                <div className="text-white/70">Process</div>
                 <div className="text-white/90 font-mono text-right">⌘⏎</div>
                 
-                <div className="text-white/70">Delete Last</div>
+                <div className="text-white/70">Delete</div>
                 <div className="text-white/90 font-mono text-right">⌘L</div>
                 
-                <div className="text-white/70">Reset View</div>
+                <div className="text-white/70">Reset</div>
                 <div className="text-white/90 font-mono text-right">⌘R</div>
                 
-                <div className="text-white/70">Quit App</div>
+                <div className="text-white/70">Quit</div>
                 <div className="text-white/90 font-mono text-right">⌘Q</div>
               </div>
             </div>
           </div>
 
           
-          <div className="space-y-3">
-            <label className="text-sm font-medium text-white">AI Model Selection</label>
-            <p className="text-xs text-white/60 -mt-2 mb-1">
-              Select models for each processing stage
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-white">AI Model Selection</label>
+            <p className="text-xs text-white/60 -mt-1 mb-1">
+              Select models for each stage
             </p>
             
             {modelCategories.map((category) => {
@@ -710,13 +706,13 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 category.anthropicModels;
               
               return (
-                <div key={category.key} className="mb-2">
-                  <label className="text-xs font-medium text-white mb-1 block">
+                <div key={category.key} className="mb-1.5">
+                  <label className="text-xs font-medium text-white mb-0.5 block">
                     {category.title}
                   </label>
-                  <p className="text-xs text-white/50 mb-1">{category.description}</p>
+                  <p className="text-[10px] text-white/50 mb-1">{category.description}</p>
                   
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {models.map((m) => {
                       // Determine which state to use based on category key
                       const currentValue = 
@@ -733,14 +729,14 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                       return (
                         <div
                           key={m.id}
-                          className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
+                          className={`p-1 rounded cursor-pointer transition-colors ${
                             currentValue === m.id
                               ? "bg-white/10 border border-white/20"
                               : "bg-black/30 border border-white/5 hover:bg-white/5"
                           }`}
                           onClick={() => setValue(m.id)}
                         >
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5">
                             <div
                               className={`w-2 h-2 rounded-full ${
                                 currentValue === m.id ? "bg-white" : "bg-white/20"
@@ -748,7 +744,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                             />
                             <div className="flex-1">
                               <p className="font-medium text-white text-xs">{m.name}</p>
-                              <p className="text-xs text-white/50 leading-tight">{m.description}</p>
+                              <p className="text-[10px] text-white/50 leading-tight">{m.description}</p>
                             </div>
                           </div>
                         </div>
@@ -760,52 +756,52 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             })}
           </div>
         </div>
-        <div className="space-y-3 pt-3 border-t border-white/10">
-          <h3 className="text-sm font-medium text-white">Speech-to-Text Settings</h3>
+        <div className="space-y-1 pt-1 border-t border-white/10">
+          <h3 className="text-xs font-medium text-white">Speech-to-Text</h3>
           
-          <div className="space-y-2">
-            <div className="space-y-2">
+          <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-xs font-medium text-white">
                 Speech Service
               </label>
-              <div className="flex gap-2">
+              <div className="flex gap-1.5">
                 <div
-                  className={`flex-1 p-1.5 rounded-lg cursor-pointer transition-colors ${
+                  className={`flex-1 p-1 rounded cursor-pointer transition-colors ${
                     speechService === "whisper"
                       ? "bg-white/10 border border-white/20"
                       : "bg-black/30 border border-white/5 hover:bg-white/5"
                   }`}
                   onClick={() => setSpeechService("whisper")}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <div
                       className={`w-2 h-2 rounded-full ${
                         speechService === "whisper" ? "bg-white" : "bg-white/20"
                       }`}
                     />
                     <div className="flex flex-col">
-                      <p className="font-medium text-white text-xs">OpenAI Whisper</p>
-                      <p className="text-xs text-white/50">Uses OpenAI key</p>
+                      <p className="font-medium text-white text-[9px]">Whisper</p>
+                      <p className="text-[8px] text-white/50">OpenAI</p>
                     </div>
                   </div>
                 </div>
                 <div
-                  className={`flex-1 p-1.5 rounded-lg cursor-pointer transition-colors ${
+                  className={`flex-1 p-1 rounded cursor-pointer transition-colors ${
                     speechService === "google"
                       ? "bg-white/10 border border-white/20"
                       : "bg-black/30 border border-white/5 hover:bg-white/5"
                   }`}
                   onClick={() => setSpeechService("google")}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <div
                       className={`w-2 h-2 rounded-full ${
                         speechService === "google" ? "bg-white" : "bg-white/20"
                       }`}
                     />
                     <div className="flex flex-col">
-                      <p className="font-medium text-white text-xs">Google Speech</p>
-                      <p className="text-xs text-white/50">Separate API key</p>
+                      <p className="font-medium text-white text-[9px]">Google</p>
+                      <p className="text-[8px] text-white/50">Separate key</p>
                     </div>
                   </div>
                 </div>
@@ -826,53 +822,70 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           </div>
           
           {/* Speech section buttons */}
-          <div className="flex justify-end space-x-2 mt-2">
+          <div className="flex justify-end space-x-1.5 mt-1.5">
             {/* Test Google API Key button */}
             {speechService === 'google' && googleApiKey && (
               <Button
                 onClick={testGoogleSpeechApiKey}
-                className="px-3 py-1 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-lg font-medium text-xs"
+                className="px-2 py-1 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded font-medium text-[9px] h-6"
                 disabled={isTestingGoogleKey || !googleApiKey}
               >
-                {isTestingGoogleKey ? "Testing..." : "Test Key"}
+                {isTestingGoogleKey ? "Testing..." : "Test"}
               </Button>
             )}
             
             {/* Save Speech Settings button */}
             <Button
               onClick={handleSaveSpeechSettings}
-              className="px-3 py-1 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-lg font-medium text-xs"
+              className="px-2 py-1 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded font-medium text-[9px] h-6"
               disabled={isLoading}
             >
-              Save Speech
+              Save
             </Button>
           </div>
         </div>
 
         {/* Multi-Monitor Settings Section */}
-        <div className="space-y-3 py-3 border-t border-white/10">
-          <div className="flex items-center gap-2">
-            <Settings className="w-4 h-4 text-white" />
-            <label className="text-sm font-medium text-white">Multi-Monitor Support</label>
+        <div className="space-y-0.5 py-0.5 border-t border-white/10">
+          <div className="flex items-center gap-1">
+            <Settings className="w-2 h-2 text-white/70" />
+            <label className="text-xs font-medium text-white/90 uppercase tracking-wide">Monitors</label>
           </div>
-          <div className="bg-black/30 rounded-lg p-3">
+          <div className="bg-black/30 rounded p-1 text-xs">
             <MultiMonitorSettings className="text-white" />
+            <div className="mt-1 pt-1 border-t border-white/10">
+              <MonitorSelector onMonitorSelect={(monitorId, position) => {
+                console.log('Moving to monitor:', monitorId, position);
+              }} className="w-full" />
+            </div>
           </div>
         </div>
 
-        <DialogFooter className="flex justify-between sm:justify-between">
+
+        {/* Logging Settings Section */}
+        <div className="space-y-0.5 py-0.5 border-t border-white/10">
+          <div className="flex items-center gap-1">
+            <Settings className="w-2 h-2 text-white/70" />
+            <label className="text-xs font-medium text-white/90 uppercase tracking-wide">Logging</label>
+          </div>
+          <div className="bg-black/30 rounded p-1 text-xs">
+            <LoggingSettings ref={loggingSettingsRef} />
+          </div>
+        </div>
+
+        <DialogFooter className="flex justify-between sm:justify-between pt-1 mt-1 border-t border-white/10">
           <Button
             onClick={() => handleOpenChange(false)}
-            className="px-4 py-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded-xl font-medium"
+            className="px-3 py-1.5 bg-white/10 text-white hover:bg-white/20 border border-white/10 rounded font-medium text-xs h-7"
           >
             Cancel
           </Button>
           <Button
-            className="px-4 py-2 bg-white text-black rounded-xl font-medium hover:bg-white/90 transition-colors"
+            className="px-3 py-1.5 bg-white text-black rounded font-medium hover:bg-white/90 transition-colors text-xs h-7"
             onClick={handleSave}
             disabled={isLoading || !apiKey}
           >
-            {isLoading ? "Saving..." : "Save Settings"}
+            {isLoading ? "Saving..." : "Save"}
           </Button>
         </DialogFooter>
       </DialogContentNoOverlay>

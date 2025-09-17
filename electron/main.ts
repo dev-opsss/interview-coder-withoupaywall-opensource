@@ -46,17 +46,18 @@ import { ScreenshotHelper } from "./ScreenshotHelper"
 import { ShortcutsHelper } from "./shortcuts"
 import { initAutoUpdater } from "./autoUpdater"
 import { configHelper } from "./ConfigHelper"
+import { log } from './logger'
 import * as dotenv from "dotenv"
 import fsPromises from 'fs/promises'; // Use promises version of fs
 import pdf from 'pdf-parse';
 import mammoth from 'mammoth';
-import { initializeStore, getStoreInstance } from './store'
+import { initializeStore, getStoreInstance, getStealthModeState, saveStealthModeState } from './store'
 import { release } from "node:os"
 import { autoUpdater } from "electron-updater"
 import { SpeechBridge } from './SpeechBridge';
 import { AudioCapture } from './AudioCapture';
 import { GoogleSpeechService } from './GoogleSpeechService';
-import { getMultiMonitorManager } from './MultiMonitorManager';
+import { getMultiMonitorManager, initializeMultiMonitorManager } from './MultiMonitorManager';
 import { getMainWindowManager } from './WindowManager';
 
 // Create a services object to store references to our services
@@ -247,6 +248,12 @@ const state = {
   
   // Stealth mode state
   originalArgv: null as string[] | null,
+  
+  // Quit state management
+  isForceQuitting: false,
+  
+  // Prevent auto-hide on first load
+  hasLoadedOnce: false,
 
   // Processing events
   PROCESSING_EVENTS: {
@@ -300,6 +307,7 @@ export interface IShortcutsHelperDeps {
   moveWindowUp: () => void
   moveWindowDown: () => void
   toggleVoiceInput: () => void
+  setForceQuitting: (value: boolean) => void
 }
 
 export interface IIpcHandlerDeps {
@@ -322,6 +330,8 @@ export interface IIpcHandlerDeps {
   moveWindowRight: () => void
   moveWindowUp: () => void
   moveWindowDown: () => void
+  setForceQuitting: (value: boolean) => void
+  isWindowVisible: () => boolean
   googleSpeechService: GoogleSpeechService | null
 }
 
@@ -369,7 +379,8 @@ function initializeHelpers() {
       ),
     moveWindowUp: () => moveWindowVertical((y) => y - state.step),
     moveWindowDown: () => moveWindowVertical((y) => y + state.step),
-    toggleVoiceInput
+    toggleVoiceInput,
+    setForceQuitting
   } as IShortcutsHelperDeps)
 
   // Synchronize settings between ConfigHelper and store
@@ -424,9 +435,10 @@ async function createWindow(): Promise<void> {
 
   safeLog("Starting window creation process...")
 
-  // Initialize multi-monitor support
+  // Initialize multi-monitor support after app is ready
   const windowManager = appServices.windowManager;
-  const multiMonitorManager = appServices.multiMonitorManager;
+  const multiMonitorManager = await initializeMultiMonitorManager();
+  appServices.multiMonitorManager = multiMonitorManager;
   
   // Get default position from WindowManager (handles multi-monitor)
   const defaultPosition = windowManager.getDefaultPosition();
@@ -538,6 +550,11 @@ async function createWindow(): Promise<void> {
   // Add more detailed logging for window events
   state.mainWindow.webContents.on("did-finish-load", () => {
     safeLog("Window finished loading")
+    // Allow stealth mode after initial load is complete
+    setTimeout(() => {
+      state.hasLoadedOnce = true;
+      safeLog("Initial load complete - stealth mode interception now active");
+    }, 2000); // Give 2 seconds for the app to fully initialize
   })
   state.mainWindow.webContents.on(
     "did-fail-load",
@@ -615,7 +632,7 @@ async function createWindow(): Promise<void> {
   // Configure window behavior
   state.mainWindow.webContents.setZoomFactor(1)
   if (isDev) {
-    state.mainWindow.webContents.openDevTools()
+    state.mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
   state.mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     safeLog("Attempting to open URL:", url)
@@ -711,8 +728,20 @@ async function createWindow(): Promise<void> {
   state.mainWindow.on("move", handleWindowMove)
   state.mainWindow.on("resize", handleWindowResize)
   
-  // Intercept close event to hide instead of quit
+  // Intercept close event to hide instead of quit (unless force quitting)
   state.mainWindow.on("close", (event) => {
+    if (state.isForceQuitting) {
+      safeLog("Force quit detected - allowing application to close");
+      return; // Allow the window to close normally
+    }
+    
+    // Prevent auto-hide during initial load
+    if (!state.hasLoadedOnce) {
+      safeLog("Ignoring close event during initial load - window will remain visible");
+      event.preventDefault();
+      return;
+    }
+    
     safeLog("Window close event intercepted - hiding instead of quitting");
     event.preventDefault(); // Prevent the window from actually closing
     enableStealthMode(); // Hide the window using stealth mode
@@ -772,11 +801,11 @@ async function createWindow(): Promise<void> {
       }
 
       if (!apiKey && !serviceAccountKeyContent) {
-        console.warn('[Main Process] No API Key or valid Service Account key content found. Google Speech service may not work.');
+        log.auth.warn('[Main Process] No API Key or valid Service Account key content found. Google Speech service may not work.');
         // Decide if you want to throw an error or proceed without credentials
       }
     } catch (error) {
-        console.error('[Main Process] Failed to load Google Cloud credentials:', error);
+        log.auth.error('[Main Process] Failed to load Google Cloud credentials:', error);
         serviceAccountKeyContent = null; // Ensure it's null on error
         // Handle error appropriately, maybe prevent service initialization
     }
@@ -796,6 +825,11 @@ async function createWindow(): Promise<void> {
 
     // Window closed handler is already set up above in the main window creation
     // No need for duplicate handler here
+
+    // Restore stealth mode state after window is fully initialized
+    setTimeout(async () => {
+      await restoreStealthModeOnStartup();
+    }, 1000); // Small delay to ensure window is fully ready
 
   } catch (error) {
     safeError("Failed to initialize application services:", error)
@@ -899,7 +933,7 @@ function showMainWindow(): void {
   }
 }
 
-function enableStealthMode(): void {
+async function enableStealthMode(): Promise<void> {
   if (!state.mainWindow || state.mainWindow.isDestroyed()) {
     return;
   }
@@ -962,13 +996,25 @@ function enableStealthMode(): void {
     }
     
     state.isWindowVisible = false;
+    
+    // Persist stealth mode state
+    try {
+      await saveStealthModeState(true);
+      safeLog('Stealth mode state persisted to store');
+    } catch (error) {
+      safeLog('Could not persist stealth mode state:', error);
+    }
+    
     safeLog('Maximum stealth mode enabled');
+    
+    // Notify renderer that stealth mode is enabled
+    safeSendToRenderer('stealth-mode-changed', true);
   } catch (error) {
     safeError('Error enabling stealth mode:', error);
   }
 }
 
-function disableStealthMode(): void {
+async function disableStealthMode(): Promise<void> {
   if (!state.mainWindow || state.mainWindow.isDestroyed()) {
     return;
   }
@@ -1028,13 +1074,83 @@ function disableStealthMode(): void {
     }
     
     state.isWindowVisible = true;
+    
+    // Persist stealth mode state
+    try {
+      await saveStealthModeState(false);
+      safeLog('Stealth mode state persisted to store');
+    } catch (error) {
+      safeLog('Could not persist stealth mode state:', error);
+    }
+    
     safeLog('Stealth mode disabled');
+    
+    // Notify renderer that stealth mode is disabled
+    safeSendToRenderer('stealth-mode-changed', false);
   } catch (error) {
     safeError('Error disabling stealth mode:', error);
   }
 }
 
-function toggleMainWindow(): void {
+async function restoreStealthModeOnStartup(): Promise<void> {
+  try {
+    const shouldBeInStealthMode = await getStealthModeState();
+    safeLog(`Restoring stealth mode state: ${shouldBeInStealthMode}`);
+    
+    if (shouldBeInStealthMode) {
+      // Apply stealth mode without persisting again (to avoid recursion)
+      if (state.mainWindow && !state.mainWindow.isDestroyed()) {
+        // Apply stealth mode settings
+        state.mainWindow.setOpacity(0);
+        state.mainWindow.setIgnoreMouseEvents(true, { forward: true });
+        state.mainWindow.minimize();
+        
+        // Platform-specific stealth enhancements
+        if (process.platform === "darwin") {
+          state.mainWindow.setHiddenInMissionControl(true);
+          state.mainWindow.setSkipTaskbar(true);
+          try {
+            app.dock.hide();
+          } catch (error) {
+            safeLog('Could not hide dock icon on startup:', error);
+          }
+          state.mainWindow.setVisibleOnAllWorkspaces(false);
+          state.mainWindow.setAlwaysOnTop(false);
+          try {
+            app.setName("System Process");
+          } catch (error) {
+            safeLog('Could not change app name on startup:', error);
+          }
+        } else if (process.platform === "win32") {
+          state.mainWindow.setSkipTaskbar(true);
+          state.mainWindow.setPosition(-2000, -2000);
+        }
+        
+        process.title = "System Process";
+        
+        // Restore argv masking
+        if (!state.originalArgv) {
+          state.originalArgv = [...process.argv];
+        }
+        process.argv = ['system', 'process'];
+        
+        state.isWindowVisible = false;
+        safeLog('Stealth mode restored on startup');
+        
+        // Notify renderer that stealth mode is enabled
+        safeSendToRenderer('stealth-mode-changed', true);
+      }
+    } else {
+      // Ensure we're in normal mode
+      state.isWindowVisible = true;
+      safeSendToRenderer('stealth-mode-changed', false);
+    }
+  } catch (error) {
+    safeError('Error restoring stealth mode on startup:', error);
+  }
+}
+
+async function toggleMainWindow(): Promise<void> {
   safeLog(`Toggling window. Current state: ${state.isWindowVisible ? 'visible' : 'hidden'}, mainWindow exists: ${state.mainWindow ? 'yes' : 'no'}`);
   
   if (!state.mainWindow) {
@@ -1051,10 +1167,10 @@ function toggleMainWindow(): void {
     // Direct toggle without using helper functions
   if (state.isWindowVisible) {
       // Hide window with stealth mode
-      enableStealthMode();
+      await enableStealthMode();
   } else {
       // Show window
-      disableStealthMode();
+      await disableStealthMode();
     }
   } catch (error) {
     safeError('Error toggling window:', error);
@@ -1505,6 +1621,8 @@ async function initializeApp() {
         ),
       moveWindowUp: () => moveWindowVertical((y) => y - state.step),
       moveWindowDown: () => moveWindowVertical((y) => y + state.step),
+      setForceQuitting,
+      isWindowVisible,
       googleSpeechService: appServices.googleSpeechService
     };
 
@@ -1526,7 +1644,7 @@ async function initializeApp() {
     // Initialize GOOGLE_APPLICATION_CREDENTIALS if service account is available
     try {
       if (configHelper.hasServiceAccountCredentials()) {
-        console.log('Main Process: Detected service account credentials, initializing environment');
+        log.system.info('Main Process: Detected service account credentials, initializing environment');
         
         // Ensure we have a path to the credentials file
         const tempJsonPath = path.join(app.getPath('temp'), 'speech-credentials-main.json');
@@ -1538,13 +1656,13 @@ async function initializeApp() {
           
           // Set environment variable for Google Speech API
           process.env.GOOGLE_APPLICATION_CREDENTIALS = tempJsonPath;
-          console.log(`Main Process: Set GOOGLE_APPLICATION_CREDENTIALS to ${tempJsonPath}`);
+          log.system.debug('Main Process: Set GOOGLE_APPLICATION_CREDENTIALS environment variable');
         } else {
-          console.log('Main Process: Could not load service account key, skipping environment setup');
+          log.system.info('Main Process: Could not load service account key, skipping environment setup');
         }
       }
     } catch (error) {
-      console.error('Main Process: Error initializing Google credentials:', error);
+      log.system.error('Main Process: Error initializing Google credentials:', error);
     }
 
   } catch (error) {
@@ -1671,6 +1789,29 @@ function toggleVoiceInput(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     safeLog("Toggling voice input in renderer...");
     mainWindow.webContents.send("toggle-voice-input");
+  }
+}
+
+function setForceQuitting(value: boolean): void {
+  safeLog(`Setting force quit flag to: ${value}`);
+  state.isForceQuitting = value;
+}
+
+function isWindowVisible(): boolean {
+  return state.isWindowVisible;
+}
+
+// Utility function to safely send IPC messages
+function safeSendToRenderer(channel: string, ...args: any[]): void {
+  const mainWindow = state.mainWindow;
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    try {
+      mainWindow.webContents.send(channel, ...args);
+    } catch (error) {
+      safeError(`Error sending IPC message to channel '${channel}':`, error);
+    }
+  } else {
+    safeLog(`Skipping IPC send to '${channel}' - window not available`);
   }
 }
 

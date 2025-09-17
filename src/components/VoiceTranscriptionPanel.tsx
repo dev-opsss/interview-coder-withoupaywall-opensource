@@ -93,6 +93,9 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
   // --- NEW: State for backend logging control ---
   const [isTranscriptLoggingActive, setIsTranscriptLoggingActive] = useState<boolean>(false);
+  // --- LLM Provider Status ---
+  const [llmProvider, setLlmProvider] = useState<string>('openai');
+  const [llmKeyPresent, setLlmKeyPresent] = useState<boolean>(false);
 
   // --- Ref to track if devices are loaded ---
   const devicesLoadedRef = useRef<boolean>(false);
@@ -203,27 +206,10 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   }, []);
 
   // Handle a speech segment (audio blob) from the voice detection hook
-  const handleSpeechSegment = useCallback(async (audioBlob: Blob, role: 'user' | 'interviewer') => {
-    console.log(`---> VTP: handleSpeechSegment called for ${role}, size: ${audioBlob.size}`);
-    setVoiceStatus('processing');
-    setLastError(null); 
-    try {
-      // Convert Blob to ArrayBuffer for sending over IPC
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      // ---> Convert to Uint8Array before sending <---
-      const uint8Array = new Uint8Array(arrayBuffer);
-      
-      // Send audio data AND role to main process via the SpeechBridge channel
-      console.log(`---> VTP: Sending speech:audio-data (Uint8Array size: ${uint8Array.byteLength}, role: ${role})`);
-      window.electronAPI?.send('speech:audio-data', { audio: uint8Array, role: role }); // <-- Send Uint8Array
-      // Note: We no longer expect a direct response here. Updates come via onTranscriptionReceived.
-      setVoiceStatus('idle'); // Reset status after sending
-
-    } catch (error) {
-      console.error("Error handling speech segment:", error);
-      setVoiceStatus('error');
-      toast.error("Error processing audio segment.");
-    }
+  const handleSpeechSegment = useCallback(async (_audioBlob: Blob, _role: 'user' | 'interviewer') => {
+    // Segment-end blobs are no longer sent to streaming; VAD already streams frames continuously.
+    // Keep UX state transitions minimal.
+    setVoiceStatus('idle');
   }, []);
 
   // Helper function to calculate text similarity (Levenshtein distance based)
@@ -655,6 +641,36 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
   };
   // --- END: Handlers for Backend Logging ---
 
+  // --- Load provider/key status ---
+  useEffect(() => {
+    const loadProviderStatus = async () => {
+      try {
+        const cfg = await window.electronAPI?.getConfig();
+        const provider = (cfg?.apiProvider || 'openai').toLowerCase();
+        setLlmProvider(provider);
+
+        let hasKey = false;
+        if (provider === 'openai') {
+          const key = await window.electronAPI?.getOpenAIApiKey?.();
+          hasKey = !!key || !!cfg?.apiKey;
+        } else if (provider === 'gemini') {
+          const key = await window.electronAPI?.getGeminiApiKey?.();
+          hasKey = !!key;
+        } else if (provider === 'anthropic') {
+          const key = await window.electronAPI?.getAnthropicApiKey?.();
+          hasKey = !!key;
+        }
+        setLlmKeyPresent(!!hasKey);
+      } catch (e) {
+        setLlmProvider('openai');
+        setLlmKeyPresent(false);
+      }
+    };
+    loadProviderStatus();
+  }, []);
+
+  // Removed Test LLM healthcheck per user request
+
   // --- NEW: Handler to clear transcript and suggestions ---
   const handleClearTranscript = useCallback(() => {
     setTranscriptEntries([]);
@@ -723,7 +739,7 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
       <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 w-11/12 max-w-4xl bg-black/95 dark:bg-gray-900/95 rounded-lg shadow-2xl border border-indigo-200/50 dark:border-indigo-500/30 z-[800] overflow-hidden flex flex-col max-h-[80vh] motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-500">
         {/* Header */}
         <div className="p-3 bg-gradient-to-r from-purple-600 to-indigo-700 flex justify-between items-center flex-shrink-0 border-b border-indigo-300/20">
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {/* --- Hide Manual Mic Button in Auto Mode --- */} 
             {!autoMode && (
               <button 
@@ -772,25 +788,29 @@ export const VoiceTranscriptionPanel: React.FC<VoiceTranscriptionPanelProps> = (
             </div>
 
             {/* --- Transcript Logging Buttons --- */}
-            <div className="flex items-center space-x-1 ml-2">
+            <div className="relative flex items-center gap-2 ml-2 flex-wrap">
+              {/* LLM Provider Chip (moved right) */}
+              <span
+                className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full shadow-sm bg-transparent ${llmKeyPresent ? 'border border-emerald-400/60 text-emerald-100/90' : 'border border-red-400/70 text-red-100/90'}`}
+                title={llmKeyPresent ? `Provider ${llmProvider} configured` : `Missing ${llmProvider} API key`}
+              >
+                {llmProvider}{llmKeyPresent ? '' : ' (no key)'}
+              </span>
+              {/* Pill buttons for transcript logging */}
               {!isTranscriptLoggingActive ? (
                 <button
                   onClick={handleStartLogging}
-                  className="flex items-center justify-center px-2 py-1 h-7 rounded bg-white/30 hover:bg-white/40 text-white text-xs transition-colors shadow-sm"
-                  title="Start Backend Transcript Log"
+                  className="h-7 px-3 rounded-full bg-emerald-500/80 hover:bg-emerald-500 text-white text-[11px] transition-colors shadow-sm"
+                  title="Start transcript logging"
                 >
-                  {/* Simple Log Icon */} 
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                   Start Log
                 </button>
               ) : (
                 <button
                   onClick={handleStopLogging}
-                  className="flex items-center justify-center px-2 py-1 h-7 rounded bg-red-500 hover:bg-red-600 text-white text-xs transition-colors shadow-sm"
-                  title="Stop Backend Transcript Log"
+                  className="h-7 px-3 rounded-full bg-red-500/80 hover:bg-red-500 text-white text-[11px] transition-colors shadow-sm"
+                  title="Stop transcript logging"
                 >
-                  {/* Stop Icon */} 
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="mr-1"><rect x="6" y="6" width="12" height="12" /></svg>
                   Stop Log
                 </button>
               )}

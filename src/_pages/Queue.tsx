@@ -25,6 +25,10 @@ interface QueueProps {
   onToggleLiveAssistant: () => void
   isLiveAssistantActive: boolean
   isChatPanelOpen: boolean
+  // AI Provider props
+  chatCurrentProvider?: 'openai' | 'gemini' | 'anthropic'
+  chatApiConnected?: boolean
+  onChatProviderChange?: (provider: 'openai' | 'gemini' | 'anthropic') => void
 }
 
 const Queue: React.FC<QueueProps> = ({
@@ -35,7 +39,10 @@ const Queue: React.FC<QueueProps> = ({
   onToggleChat,
   onToggleLiveAssistant,
   isLiveAssistantActive,
-  isChatPanelOpen
+  isChatPanelOpen,
+  chatCurrentProvider,
+  chatApiConnected,
+  onChatProviderChange
 }) => {
   const { showToast } = useToast()
 
@@ -164,6 +171,9 @@ const Queue: React.FC<QueueProps> = ({
             isLiveAssistantActive={isLiveAssistantActive}
             onToggleChat={onToggleChat}
             isChatPanelOpen={isChatPanelOpen}
+            chatCurrentProvider={chatCurrentProvider}
+            chatApiConnected={chatApiConnected}
+            onChatProviderChange={onChatProviderChange}
           />
         </div>
       </div>

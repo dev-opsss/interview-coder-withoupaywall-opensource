@@ -2,6 +2,7 @@ node_modules
 dist-electron
 release
 dist
+coverage
 .env
 .env.*
 **/.DS_Store

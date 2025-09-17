@@ -8,7 +8,7 @@ type AIChatButtonProps = {
 const AIChatButton: React.FC<AIChatButtonProps> = ({ isActive, onToggle }) => {
   return (
     <div
-      className={`flex items-center gap-1.5 cursor-pointer rounded px-2 py-1.5 transition-colors ${
+      className={`flex items-center gap-1 cursor-pointer rounded px-1.5 py-1 transition-colors ${
         isActive 
           ? "bg-blue-600 text-white"
           : "text-white/70 hover:bg-white/10"
@@ -16,7 +16,7 @@ const AIChatButton: React.FC<AIChatButtonProps> = ({ isActive, onToggle }) => {
       onClick={onToggle}
       title={isActive ? "Close AI Chat" : "Open AI Chat"}
     >
-      <div className="w-4 h-4 flex items-center justify-center">
+      <div className="w-3 h-3 flex items-center justify-center">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 24 24"
@@ -25,7 +25,7 @@ const AIChatButton: React.FC<AIChatButtonProps> = ({ isActive, onToggle }) => {
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className="w-3.5 h-3.5"
+          className="w-3 h-3"
         >
           <rect width="18" height="18" x="3" y="3" rx="2" />
           <path d="M7 9h6" />
@@ -36,7 +36,7 @@ const AIChatButton: React.FC<AIChatButtonProps> = ({ isActive, onToggle }) => {
           <path d="M15 17h2" />
         </svg>
       </div>
-      <span className="text-[11px] leading-none">AI Chat</span>
+      <span className="text-[10px] leading-none">Chat</span>
     </div>
   );
 };

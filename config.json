@@ -1,0 +1,19 @@
+{
+  "apiKey": "",
+  "apiProvider": "gemini",
+  "openaiApiKey": "",
+  "geminiApiKey": "",
+  "anthropicApiKey": "",
+  "extractionModel": "gemini-2.0-flash",
+  "solutionModel": "gemini-2.0-flash",
+  "debuggingModel": "gemini-2.0-flash",
+  "language": "python",
+  "opacity": 1,
+  "speechService": "whisper",
+  "googleSpeechApiKey": "",
+  "config": {
+    "speechService": "whisper",
+    "googleSpeechApiKey": ""
+  },
+  "hasSpeechCredentials": false
+}

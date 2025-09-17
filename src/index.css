@@ -2,6 +2,97 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Advanced screenshare/screenshot protection */
+.screenshare-hidden {
+  /* CSS masking technique - creates visual content but may not be captured */
+  mask: linear-gradient(45deg, transparent 0%, black 1%, black 99%, transparent 100%);
+  -webkit-mask: linear-gradient(45deg, transparent 0%, black 1%, black 99%, transparent 100%);
+  
+  /* Complex filter chain that interferes with capture */
+  filter: 
+    contrast(1.01) 
+    brightness(0.99) 
+    saturate(1.01) 
+    hue-rotate(0.1deg)
+    blur(0.01px)
+    drop-shadow(0 0 0.1px transparent);
+  -webkit-filter: 
+    contrast(1.01) 
+    brightness(0.99) 
+    saturate(1.01) 
+    hue-rotate(0.1deg)
+    blur(0.01px)
+    drop-shadow(0 0 0.1px transparent);
+  
+  /* 3D transforms that may confuse capture algorithms */
+  transform: 
+    perspective(1000px)
+    rotateX(0.01deg) 
+    rotateY(0.01deg) 
+    rotateZ(0.01deg)
+    scale3d(0.9999, 0.9999, 1)
+    translateZ(0.01px);
+  -webkit-transform: 
+    perspective(1000px)
+    rotateX(0.01deg) 
+    rotateY(0.01deg) 
+    rotateZ(0.01deg)
+    scale3d(0.9999, 0.9999, 1)
+    translateZ(0.01px);
+  
+  /* Advanced rendering properties */
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  
+  /* Blend modes that may interfere with capture */
+  mix-blend-mode: normal;
+  isolation: isolate;
+  
+  /* Opacity with micro-variation */
+  opacity: 0.9998;
+  
+  /* Force hardware acceleration */
+  will-change: transform, opacity, filter;
+  
+  /* Clip path with minimal inset */
+  clip-path: inset(0.01px);
+  -webkit-clip-path: inset(0.01px);
+  
+  /* Containment for rendering isolation */
+  contain: layout style paint;
+}
+
+/* Specific overrides for interactive elements */
+.screenshare-hidden select,
+.screenshare-hidden button {
+  pointer-events: auto !important;
+  position: relative !important;
+  z-index: 1 !important;
+  cursor: pointer !important;
+}
+
+/* Additional protection for dropdown options */
+.screenshare-hidden option {
+  /* Complex background that may not render in screenshots */
+  background: 
+    linear-gradient(135deg, 
+      rgba(0,0,0,0.9) 0%, 
+      rgba(0,0,0,0.95) 25%,
+      rgba(0,0,0,0.9) 50%,
+      rgba(0,0,0,0.95) 75%,
+      rgba(0,0,0,0.9) 100%
+    ) !important;
+  
+  /* Micro-opacity variation */
+  opacity: 0.9997 !important;
+  pointer-events: auto !important;
+  
+  /* Text shadow for additional obfuscation */
+  text-shadow: 0 0 0.1px currentColor;
+}
+
 /* Custom animations for UI elements */
 @keyframes fadeIn {
   from { opacity: 0; transform: translate(-50%, -48%); }

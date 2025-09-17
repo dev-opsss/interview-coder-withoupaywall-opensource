@@ -53,7 +53,7 @@ export class MultiMonitorManager extends EventEmitter {
   constructor() {
     super();
     this.settings = this.getDefaultSettings();
-    this.initializeMonitorDetection();
+    // Don't initialize immediately - wait for app ready event
   }
 
   private getDefaultSettings(): MultiMonitorSettings {
@@ -92,7 +92,9 @@ export class MultiMonitorManager extends EventEmitter {
     ];
   }
 
-  private async initializeMonitorDetection(): Promise<void> {
+  public async initialize(): Promise<void> {
+    if (this.isInitialized) return;
+    
     try {
       await this.loadSettings();
       this.detectMonitors();
@@ -407,6 +409,12 @@ export function getMultiMonitorManager(): MultiMonitorManager {
     multiMonitorManager = new MultiMonitorManager();
   }
   return multiMonitorManager;
+}
+
+export async function initializeMultiMonitorManager(): Promise<MultiMonitorManager> {
+  const manager = getMultiMonitorManager();
+  await manager.initialize();
+  return manager;
 }
 
 export function destroyMultiMonitorManager(): void {

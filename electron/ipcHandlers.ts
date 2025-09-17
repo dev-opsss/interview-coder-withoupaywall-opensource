@@ -15,7 +15,8 @@ import {
   waitForStoreReady, 
   AudioDeviceSettings,
   AiSettings,
-  getStoreInstance
+  getStoreInstance,
+  saveStealthModeState
 } from "./store"
 import * as fsPromises from 'fs/promises'; // Import fs.promises
 import pdf from 'pdf-parse'; // Import pdf-parse
@@ -23,6 +24,8 @@ import mammoth from 'mammoth'; // Import mammoth
 import { GoogleSpeechService } from "./GoogleSpeechService"
 import { getMultiMonitorManager } from "./MultiMonitorManager"
 import { getMainWindowManager } from "./WindowManager"
+import { TranscriptLogger } from './TranscriptLogger'
+import { log } from './logger'
 
 // --- Define and EXPORT AI Constants ---
 export const DEFAULT_PERSONALITY = 'Default';
@@ -231,10 +234,17 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       try {
         const screenshotPath = await deps.takeScreenshot()
         const preview = await deps.getImagePreview(screenshotPath)
-        mainWindow.webContents.send("screenshot-taken", {
-          path: screenshotPath,
-          preview
-        })
+        // Check if window and webContents are still valid before sending
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+          try {
+            mainWindow.webContents.send("screenshot-taken", {
+              path: screenshotPath,
+              preview
+            })
+          } catch (error) {
+            console.error("Error sending screenshot-taken event:", error)
+          }
+        }
         return { success: true }
       } catch (error) {
         console.error("Error triggering screenshot:", error)
@@ -276,9 +286,14 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   // Settings portal handler
   ipcMain.handle("open-settings-portal", () => {
     const mainWindow = deps.getMainWindow();
-    if (mainWindow) {
-      mainWindow.webContents.send("show-settings-dialog");
-      return { success: true };
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+      try {
+        mainWindow.webContents.send("show-settings-dialog");
+        return { success: true };
+      } catch (error) {
+        console.error("Error sending show-settings-dialog event:", error);
+        return { success: false, error: "Failed to send settings dialog event" };
+      }
     }
     return { success: false, error: "Main window not available" };
   })
@@ -451,11 +466,29 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
     safeLog(`Job Context: ${JSON.stringify(jobContext)}`);
     safeLog(`Resume provided: ${!!resumeTextContent} (length: ${resumeTextContent?.length || 0})`);
 
-    // Check for API key first
-    if (!configHelper.hasApiKey()) {
-      safeError("AI Query failed: API key missing");
+    // Check for LLM provider-specific API key (OpenAI/Gemini/Anthropic)
+    try {
+      const config = configHelper.loadConfig();
+      const provider = (config?.apiProvider || 'openai').toLowerCase();
+      let hasProviderKey = false;
+
+      if (provider === 'openai') {
+        hasProviderKey = !!configHelper.getOpenAIApiKey?.() || !!config?.apiKey;
+      } else if (provider === 'gemini') {
+        hasProviderKey = !!configHelper.getGeminiApiKey?.();
+      } else if (provider === 'anthropic') {
+        hasProviderKey = !!configHelper.getAnthropicApiKey?.();
+      }
+
+      if (!hasProviderKey) {
+        safeError(`AI Query failed: missing API key for provider '${provider}'.`);
+        deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
+        return { success: false, error: `Missing API key for provider '${provider}'. Configure it in Settings.` };
+      }
+    } catch (provErr) {
+      safeError('Error checking provider API key:', provErr);
       deps.getMainWindow()?.webContents.send(deps.PROCESSING_EVENTS.API_KEY_INVALID);
-      return { success: false, error: 'API key required' }; // Return structured error
+      return { success: false, error: 'Failed to validate AI provider configuration.' };
     }
 
     try {
@@ -729,7 +762,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       const result = await configHelper.testGoogleSpeechApiKey();
       return result;
     } catch (error: any) {
-      console.error('Error testing Google Speech API key:', error);
+      log.auth.error('Error testing Google Speech API key:', error);
       return { valid: false, error: error.message || 'Unknown error occurred' };
     }
   })
@@ -757,6 +790,23 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
         // Change process title
         process.title = "System Process";
         
+        // Persist stealth mode state
+        try {
+          await saveStealthModeState(true);
+          safeLog('Stealth mode state persisted via IPC');
+        } catch (error) {
+          console.error('Could not persist stealth mode state via IPC:', error);
+        }
+        
+        // Notify renderer that stealth mode is enabled
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+          try {
+            mainWindow.webContents.send('stealth-mode-changed', true);
+          } catch (error) {
+            console.error("Error sending stealth-mode-changed event:", error);
+          }
+        }
+        
         return { success: true, message: "Stealth mode enabled" };
       }
       return { success: false, error: "Main window not available" };
@@ -778,6 +828,23 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
         
         // Restore process title
         process.title = "Interview Coder";
+        
+        // Persist stealth mode state
+        try {
+          await saveStealthModeState(false);
+          safeLog('Stealth mode disabled state persisted via IPC');
+        } catch (error) {
+          console.error('Could not persist stealth mode disabled state via IPC:', error);
+        }
+        
+        // Notify renderer that stealth mode is disabled
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+          try {
+            mainWindow.webContents.send('stealth-mode-changed', false);
+          } catch (error) {
+            console.error("Error sending stealth-mode-changed event:", error);
+          }
+        }
         
         return { success: true, message: "Stealth mode disabled" };
       }
@@ -805,15 +872,22 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   })
   safeLog("Registered IPC handler: get-process-info");
 
+  ipcMain.handle('get-stealth-mode-status', async () => {
+    try {
+      // Return the inverse of isWindowVisible since stealth mode = !visible
+      return { isEnabled: !deps.isWindowVisible() };
+    } catch (error: any) {
+      console.error('Error getting stealth mode status:', error);
+      return { isEnabled: false, error: error.message };
+    }
+  })
+  safeLog("Registered IPC handler: get-stealth-mode-status");
+
   ipcMain.handle('force-quit-app', async () => {
     try {
       console.log('Force quit requested via IPC');
-      // Remove the close event listener temporarily to allow actual quit
-      const mainWindow = deps.getMainWindow();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.removeAllListeners('close');
-        mainWindow.close();
-      }
+      // Set force quit flag to bypass stealth mode interception
+      deps.setForceQuitting(true);
       app.quit();
       return { success: true };
     } catch (error: any) {
@@ -832,7 +906,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       // Optionally trigger re-initialization of GoogleSpeechService
       return { success: true };
     } catch (error: any) {
-      console.error('Error setting service account credentials from file:', error);
+      log.auth.error('Error setting service account credentials from file:', error);
       // Provide more specific error feedback
       const message = error.code === 'ENOENT' ? `File not found: ${filePath}` : 
                       error instanceof SyntaxError ? "Invalid JSON format in the service account file." : 
@@ -849,7 +923,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
        // Optionally trigger re-initialization of GoogleSpeechService
        return { success: true };
      } catch (error: any) {
-       console.error('Error setting service account credentials from text:', error);
+       log.auth.error('Error setting service account credentials from text:', error);
         // Provide more specific error feedback
        const message = error instanceof SyntaxError ? "Invalid JSON format provided." : 
                        error.message || "Failed to parse or encrypt the service account JSON.";
@@ -865,7 +939,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       // Optionally trigger re-initialization of GoogleSpeechService
       return { success: removed };
     } catch (error: any) {
-      console.error('Error clearing service account credentials:', error);
+      log.auth.error('Error clearing service account credentials:', error);
       return { success: false, error: error.message };
     }
   });
@@ -966,6 +1040,114 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
   });
   // --- End Resume Text Extraction Handler ---
 
+  // --- Logging Configuration Handlers ---
+  ipcMain.handle('get-logging-config', async () => {
+    try {
+      const config = log.getConfig();
+      return {
+        globalLevel: ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'][config.globalLevel] || 'INFO',
+        categoryLevels: Object.entries(config.categoryLevels).reduce((acc: any, [cat, level]) => {
+          if (typeof level === 'number') {
+            acc[cat] = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'][level] || 'INFO';
+          }
+          return acc;
+        }, {}),
+        enabledCategories: Array.from(config.enabledCategories),
+        fileLogging: config.fileLogging,
+        consoleLogging: config.console
+      };
+    } catch (error: any) {
+      log.system.error('Error getting logging config:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('set-logging-config', async (_, newConfig) => {
+    try {
+      const { globalLevel, categoryLevels, enabledCategories, fileLogging, consoleLogging } = newConfig;
+      
+      // Convert string levels back to numbers
+      const levelMap: any = { 'ERROR': 0, 'WARN': 1, 'INFO': 2, 'DEBUG': 3, 'TRACE': 4 };
+      
+      // Set global level
+      if (globalLevel) {
+        log.setGlobalLevel(levelMap[globalLevel]);
+      }
+      
+      // Set category levels
+      if (categoryLevels) {
+        Object.entries(categoryLevels).forEach(([category, level]: [string, any]) => {
+          if (level && levelMap[level] !== undefined) {
+            log.setCategoryLevel(category as any, levelMap[level]);
+          }
+        });
+      }
+      
+      // Enable/disable categories
+      if (enabledCategories) {
+        // First disable all, then enable specified ones
+        ['speech', 'ui', 'ipc', 'auth', 'file', 'network', 'window', 'system', 'performance', 'general'].forEach(cat => {
+          log.disableCategory(cat as any);
+        });
+        enabledCategories.forEach((cat: string) => {
+          log.enableCategory(cat as any);
+        });
+      }
+      
+      // File logging
+      if (fileLogging?.enabled !== undefined) {
+        if (fileLogging.enabled) {
+          log.enableFileLogging(fileLogging.directory);
+        } else {
+          log.disableFileLogging();
+        }
+      }
+      
+      // Console logging
+      if (consoleLogging?.enabled !== undefined) {
+        if (consoleLogging.enabled) {
+          log.enableConsoleLogging();
+        } else {
+          log.disableConsoleLogging();
+        }
+      }
+      
+      log.system.info('Logging configuration updated');
+      return { success: true };
+    } catch (error: any) {
+      log.system.error('Error setting logging config:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // --- Transcript Logging Handlers ---
+  ipcMain.handle('transcript:start-log', async () => {
+    try {
+      const logger = new TranscriptLogger();
+      const defaultPath = logger.getDefaultLogPath();
+      logger.startLogging(defaultPath);
+      GoogleSpeechService.transcriptLogger = logger;
+      return { success: true, path: defaultPath };
+    } catch (error: any) {
+      log.file.error('Error starting transcript logging:', error);
+      return { success: false, error: error?.message || 'Failed to start logging' };
+    }
+  });
+
+  ipcMain.handle('transcript:stop-log', async () => {
+    try {
+      if (GoogleSpeechService.transcriptLogger) {
+        GoogleSpeechService.transcriptLogger.stopLogging();
+        GoogleSpeechService.transcriptLogger = null;
+      }
+      return { success: true };
+    } catch (error: any) {
+      log.file.error('Error stopping transcript logging:', error);
+      return { success: false, error: error?.message || 'Failed to stop logging' };
+    }
+  });
+  // --- End Transcript Logging Handlers ---
+
   // --- Add Response Suggestion Handler ---
   ipcMain.handle('generate-response-suggestion', async (_event, payload) => {
     if (!deps.processingHelper) {
@@ -1051,7 +1233,7 @@ export function initializeIpcHandlers(deps: IIpcHandlerDeps): void {
       configHelper.setGoogleSpeechApiKey(apiKey);
       return true;
     } catch (error: any) {
-      console.error('Error saving Google Speech API key:', error);
+      log.auth.error('Error saving Google Speech API key:', error);
       return false;
     }
   });

@@ -13,6 +13,7 @@ export interface AiSettings {
 
 interface StoreSchema {
   aiSettings?: AiSettings;
+  stealthMode?: boolean;
   // Add other settings here like resumePath if needed
   // lastUploadedResumePath?: string;
 }
@@ -25,7 +26,8 @@ const defaults: StoreSchema = {
     interviewStage: 'Initial Screening', 
     userPreferences: '',
     autoMode: false // Default to false for auto mode
-  }
+  },
+  stealthMode: false // Default stealth mode to false
 };
 
 // --- Remove StoreWrapper --- 
@@ -229,4 +231,26 @@ export async function saveAudioDeviceSettings(settings: Partial<AudioDeviceSetti
     store.set('audio.microphoneDeviceId', settings.microphoneDeviceId);
   }
 }
-// --- End Audio Device Settings --- 
+// --- End Audio Device Settings ---
+
+// --- Stealth Mode Settings ---
+export async function getStealthModeState(): Promise<boolean> {
+  await waitForStoreReady();
+  const store = getStoreInstance();
+  if (!store) {
+    console.error("Store not available for getStealthModeState");
+    return defaults.stealthMode!; // Return default if store failed
+  }
+  
+  return store.get("stealthMode", defaults.stealthMode) as boolean;
+}
+
+export async function saveStealthModeState(isEnabled: boolean): Promise<void> {
+  await waitForStoreReady();
+  const store = getStoreInstance();
+  if (!store) {
+    throw new Error("Store not available for saveStealthModeState");
+  }
+  store.set("stealthMode", isEnabled);
+}
+// --- End Stealth Mode Settings --- 
