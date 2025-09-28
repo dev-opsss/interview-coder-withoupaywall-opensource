@@ -438,24 +438,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
       try {
       const googleApiKey = await window.electronAPI.getGoogleSpeechApiKey();
       const speechService = await window.electronAPI.getSpeechService();
-      const hasServiceAccount = await window.electronAPI.hasServiceAccountCredentials();
         
       setGoogleApiKey(googleApiKey || '');
-      
-      // If we have service account credentials, prefer Google Speech over Whisper
-      if (hasServiceAccount && speechService === 'whisper') {
-        console.log('Service account credentials detected, switching to Google Speech');
-        setSpeechService('google');
-        // Optionally auto-save this change
-        try {
-          await window.electronAPI.setSpeechService('google');
-          showToast('Info', 'Switched to Google Speech (Service Account detected)', 'success');
-        } catch (error) {
-          console.error('Failed to auto-switch to Google Speech:', error);
-        }
-      } else {
-        setSpeechService(speechService || 'whisper');
-      }
+      setSpeechService(speechService || 'whisper');
       } catch (error) {
       console.error("Failed to load speech settings:", error);
     }
