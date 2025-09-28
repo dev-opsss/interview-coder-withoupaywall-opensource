@@ -791,7 +791,7 @@ async function createWindow(): Promise<void> {
 
   try {
     // Load credentials before initializing GoogleSpeechService
-    let googleApiKey = await configHelper.getGoogleSpeechApiKey(); // Use Google Speech API key specifically
+    let apiKey = await configHelper.getApiKey();
     let serviceAccountKeyContent: string | null = null; // Store the key content directly
     try {
       serviceAccountKeyContent = await configHelper.loadServiceAccountKey(); // Returns decrypted key string or null
@@ -800,8 +800,8 @@ async function createWindow(): Promise<void> {
         serviceAccountKeyContent = null; // Ensure it's null if invalid or empty
       }
 
-      if (!googleApiKey && !serviceAccountKeyContent) {
-        log.auth.warn('[Main Process] No Google Speech API Key or valid Service Account key content found. Google Speech service may not work.');
+      if (!apiKey && !serviceAccountKeyContent) {
+        log.auth.warn('[Main Process] No API Key or valid Service Account key content found. Google Speech service may not work.');
         // Decide if you want to throw an error or proceed without credentials
       }
     } catch (error) {
@@ -812,17 +812,10 @@ async function createWindow(): Promise<void> {
 
     // Initialize GoogleSpeechService with loaded credentials and EXPLICIT language
     appServices.googleSpeechService = new GoogleSpeechService(
-      serviceAccountKeyContent ?? googleApiKey ?? undefined,
+      serviceAccountKeyContent ?? apiKey ?? undefined,
       'en-US' // <-- Explicitly set language code
     );
-    console.log(`[Main Process] GoogleSpeechService initialized with Google API Key: ${!!googleApiKey}, Service Account Content: ${!!serviceAccountKeyContent}`);
-    
-    // Auto-switch to Google Speech if credentials are available and currently using Whisper
-    const currentSpeechService = configHelper.getSpeechService();
-    if ((serviceAccountKeyContent || googleApiKey) && currentSpeechService === 'whisper') {
-      console.log('[Main Process] Google Speech credentials detected but app is set to Whisper. Consider switching to Google Speech for better performance.');
-      // Note: We don't auto-switch here to avoid changing user preferences without consent
-    }
+    console.log(`[Main Process] GoogleSpeechService initialized with API Key: ${!!apiKey}, Service Account Content: ${!!serviceAccountKeyContent}`);
 
     // SpeechBridge depends on GoogleSpeechService and mainWindow
     appServices.speechBridge = new SpeechBridge(appServices.googleSpeechService, state.mainWindow);
