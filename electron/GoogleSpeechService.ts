@@ -172,22 +172,88 @@ export class GoogleSpeechService {
           apiKeyOrCredentials.includes('"private_key"')) {
         // It's a service account JSON string
         const credentials = JSON.parse(apiKeyOrCredentials);
-        this.client = new SpeechClient({ credentials });
+        this.client = new SpeechClient({ 
+          credentials,
+          // Add explicit project ID if available
+          projectId: credentials.project_id || undefined
+        });
         log.auth.info('Initialized Google Speech client with service account credentials');
       } else if (apiKeyOrCredentials.includes('.json')) {
         // It's a path to a credentials file
         this.credentialsPath = apiKeyOrCredentials;
-        this.client = new SpeechClient({ keyFilename: apiKeyOrCredentials });
+        this.client = new SpeechClient({ 
+          keyFilename: apiKeyOrCredentials,
+          // Add explicit project ID if available in the file
+          projectId: this.extractProjectIdFromFile(apiKeyOrCredentials)
+        });
         log.auth.info('Initialized Google Speech client with credentials file');
       } else {
-        // Assume it's an API key
+        // API keys are not supported for Google Cloud Speech-to-Text API
+        // This will cause authentication errors
+        console.warn('⚠️  WARNING: API keys are not supported for Google Cloud Speech-to-Text API');
+        console.warn('⚠️  Please use Service Account credentials instead');
+        console.warn('⚠️  See GOOGLE_SPEECH_FIX.md for setup instructions');
+        
         this.apiKey = apiKeyOrCredentials;
-        this.client = new SpeechClient({ key: apiKeyOrCredentials });
-        log.auth.info('Initialized Google Speech client with API key');
+        // Try to initialize anyway, but it will likely fail
+        this.client = new SpeechClient({ 
+          key: apiKeyOrCredentials,
+          // Force REST API usage for API keys
+          apiEndpoint: 'https://speech.googleapis.com'
+        });
+        log.auth.warn('Initialized Google Speech client with API key (NOT RECOMMENDED - will likely fail)');
       }
     } catch (error) {
       console.error('Failed to initialize Google Speech client:', error);
       this.client = null;
+    }
+  }
+
+  /**
+   * Extract project ID from service account file
+   */
+  private extractProjectIdFromFile(filePath: string): string | undefined {
+    try {
+      const content = require('fs').readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(content);
+      return parsed.project_id;
+    } catch (error) {
+      console.warn('Could not extract project ID from credentials file:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Validates authentication before starting streams
+   * @returns boolean indicating if authentication is valid
+   */
+  private validateAuthentication(): boolean {
+    try {
+      if (!this.client) {
+        return false;
+      }
+
+      // For API keys, we need to check if the key is properly formatted
+      if (this.apiKey) {
+        // Basic validation for API key format
+        if (this.apiKey.length < 20) {
+          console.error('GSS: API key appears to be too short');
+          return false;
+        }
+        // Additional validation could be added here
+        return true;
+      }
+
+      // For service account credentials, we can try a simple operation
+      if (this.credentialsPath || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        // Service account credentials should be valid if we got this far
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('GSS: Authentication validation error:', error);
+      return false;
     }
   }
 
@@ -258,7 +324,37 @@ export class GoogleSpeechService {
         return false;
       }
       
-      // Make a minimal recognition request to test credentials
+      // For API keys, use a simpler test that doesn't require audio processing
+      if (this.apiKey) {
+        // Test with a minimal valid audio sample (1 second of silence)
+        const silence = Buffer.alloc(32000); // 1 second of 16kHz 16-bit audio
+        const request = {
+          config: {
+            encoding: 'LINEAR16' as const,
+            sampleRateHertz: 16000,
+            languageCode: this.language,
+          },
+          audio: {
+            content: silence.toString('base64'),
+          },
+        };
+        
+        try {
+          await this.client.recognize(request);
+          return true;
+        } catch (error: any) {
+          // Check if it's an authentication error
+          if (error.code === 16 || error.code === 'UNAUTHENTICATED' || 
+              error.message?.includes('API key') || error.message?.includes('JSON')) {
+            log.auth.error('API key validation failed:', error.message);
+            return false;
+          }
+          // Other errors (like empty audio) mean auth worked
+          return true;
+        }
+      }
+      
+      // For service account credentials, use the original test
       const request = {
         config: {
           encoding: 'LINEAR16' as const,
@@ -281,7 +377,7 @@ export class GoogleSpeechService {
       }
       
       if (error.code === 16 || error.code === 'UNAUTHENTICATED' || 
-          error.message?.includes('API key')) {
+          error.message?.includes('API key') || error.message?.includes('JSON')) {
         log.auth.error('API key validation failed:', error.message);
           return false;
         }
@@ -341,7 +437,7 @@ export class GoogleSpeechService {
           model: 'chirp_2', // Better for general transcription including interviews
         },
         audio: {
-          content: Buffer.from(audioData).toString('base64'),
+          content: Buffer.isBuffer(audioData) ? audioData.toString('base64') : Buffer.from(audioData).toString('base64'),
         },
       };
       
@@ -423,6 +519,13 @@ export class GoogleSpeechService {
       this.sendError('Speech client not initialized. Check credentials.', -1);
       return false;
     }
+
+    // Validate authentication before starting stream
+    if (!this.validateAuthentication()) {
+      console.error('GSS: Authentication validation failed. Cannot start streaming.');
+      this.sendError('Authentication failed. Please check your Google Speech API credentials.', -1);
+      return false;
+    }
     
     if (this.isStreaming) {
       console.log('GSS: Streaming already active, stopping previous stream first.');
@@ -464,8 +567,14 @@ export class GoogleSpeechService {
 
       console.log(`---> GSS: Using stream config: ${JSON.stringify(streamingRequest, null, 2)}`);
 
-      // Create a new stream
-      this.streamingRecognizeStream = this.client.streamingRecognize(streamingRequest);
+      // Create a new stream with better error handling
+      try {
+        this.streamingRecognizeStream = this.client.streamingRecognize(streamingRequest);
+      } catch (streamError: any) {
+        console.error('GSS: Failed to create streaming recognize stream:', streamError);
+        this.sendError(`Failed to create speech stream: ${streamError.message}`, -1);
+        return false;
+      }
       
       console.log("---> GSS: Attaching listeners and piping audioInputStream..."); // DEBUG
       // ---> MODIFIED: Attach listeners directly
@@ -487,8 +596,19 @@ export class GoogleSpeechService {
           .on('error', (error: any) => {
              console.error('Streaming recognition error:', error); 
              console.log(`---> GSS: Stream error event (code: ${error.code})`);
+             
+             // Handle specific authentication errors
+             let errorMessage = error.message;
+             if (error.code === 16 || error.code === 'UNAUTHENTICATED') {
+               errorMessage = 'Authentication failed. Google Speech API requires Service Account credentials, not API keys. Please see GOOGLE_SPEECH_FIX.md for setup instructions.';
+             } else if (error.message && error.message.includes('JSON')) {
+               errorMessage = 'Authentication error: Invalid response from Google Speech API. This usually means you\'re using an API key instead of Service Account credentials. Please see GOOGLE_SPEECH_FIX.md for setup instructions.';
+             } else if (error.message && error.message.includes('API key')) {
+               errorMessage = 'API keys are not supported for Google Cloud Speech-to-Text API. Please use Service Account credentials instead. See GOOGLE_SPEECH_FIX.md for setup instructions.';
+             }
+             
              if (this.targetWebContents && !this.targetWebContents.isDestroyed()) {
-                this.sendError(error.message, error.code);
+                this.sendError(errorMessage, error.code);
              }
              const wasStreaming = this.isStreaming;
              this.stopStreamingTranscription();
